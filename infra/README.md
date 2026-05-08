@@ -1,0 +1,54 @@
+# Infrastructure (Terraform)
+
+All envs live in a single GCP project (`inference-expt`). Isolation is enforced via labels, naming, subnets, GKE namespaces, and IAM Conditions.
+
+## Stack order
+
+```
+shared  → dev → staging → prod
+```
+
+`shared` MUST be applied first — it creates the VPC, DNS zone, Artifact Registry, observability primitives, and project-wide service accounts. Each env stack consumes those via `terraform_remote_state`.
+
+## State
+
+- Bucket: `gs://inference-expt-tf-state`
+- Prefix per stack: `shared/`, `dev/`, `staging/`, `prod/`
+
+## Apply
+
+> Run all `terraform` commands inside **Google Cloud Shell** (<https://shell.cloud.google.com>). Cloud Shell provides Terraform, ADC, and `gcloud` — no local installs needed.
+
+```bash
+cd ~/stylist-agent/infra/envs/shared
+terraform init && terraform apply
+
+cd ~/stylist-agent/infra/envs/dev
+terraform init && terraform apply
+
+cd ~/stylist-agent/infra/envs/staging
+terraform init && terraform apply
+
+cd ~/stylist-agent/infra/envs/prod
+terraform init && terraform apply
+```
+
+## Modules
+
+| Module | Purpose |
+|--------|---------|
+| `network` | VPC + per-env subnets + Cloud NAT |
+| `dns` | Cloud DNS managed zone for `quantum-23.com` |
+| `artifact-registry` | Docker repo for all containers |
+| `iam` | Per-env service accounts with IAM Conditions on `env` label |
+| `observability` | Log sinks, alerting policies, budget alerts, Langfuse on Cloud Run |
+| `secrets` | Secret Manager bootstrap (empty placeholders; values seeded by `scripts/05-seed-secrets.sh`) |
+| `cloud-run-service` | Reusable Cloud Run service (used by hello-world and later phases) |
+
+## Mandatory labels
+
+Every resource MUST carry:
+- `env` — `dev` | `staging` | `prod` | `shared`
+- `app` — `stylist-agent`
+
+The `scripts/03-validate-labels.sh` script enforces this in CI.

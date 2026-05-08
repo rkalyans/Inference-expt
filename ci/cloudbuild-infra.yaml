@@ -1,0 +1,48 @@
+# Validate and apply Terraform for a given env stack.
+# Usage:
+#   gcloud builds submit --config=ci/cloudbuild-infra.yaml \
+#     --substitutions=_STACK=shared,_ACTION=plan .
+
+substitutions:
+  _STACK: "shared"           # shared | dev | staging | prod
+  _ACTION: "plan"            # plan | apply
+  _TF_VERSION: "1.9.5"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+  - id: tf-init
+    name: hashicorp/terraform:${_TF_VERSION}
+    dir: infra/envs/${_STACK}
+    args: [init, -input=false]
+
+  - id: tf-fmt-check
+    name: hashicorp/terraform:${_TF_VERSION}
+    dir: infra
+    args: [fmt, -check, -recursive]
+
+  - id: tf-validate
+    name: hashicorp/terraform:${_TF_VERSION}
+    dir: infra/envs/${_STACK}
+    args: [validate]
+
+  - id: tf-plan
+    name: hashicorp/terraform:${_TF_VERSION}
+    dir: infra/envs/${_STACK}
+    args: [plan, -input=false, -out=tfplan]
+
+  - id: tf-apply
+    name: hashicorp/terraform:${_TF_VERSION}
+    dir: infra/envs/${_STACK}
+    entrypoint: sh
+    args:
+      - -c
+      - |
+        if [ "${_ACTION}" = "apply" ]; then
+          terraform apply -input=false -auto-approve tfplan
+        else
+          echo "Action=plan; skipping apply."
+        fi
+
+timeout: 1800s

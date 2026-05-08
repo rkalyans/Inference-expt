@@ -1,0 +1,43 @@
+# Terraform
+**/.terraform/
+**/.terraform.lock.hcl
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfvars
+!**/*.tfvars.example
+**/crash.log
+**/override.tf
+**/override.tf.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+.env.local
+*.egg-info/
+.pytest_cache/
+
+# Node
+node_modules/
+.next/
+dist/
+build/
+npm-debug.log*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Secrets (defense in depth — secrets must be in Secret Manager)
+*.key
+*.pem
+*service-account*.json
+credentials.json
+
+# Logs
+logs/
+*.log

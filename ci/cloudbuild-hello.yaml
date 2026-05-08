@@ -1,0 +1,85 @@
+# Build and deploy the Phase 0 smoke-test container.
+# Usage:
+#   gcloud builds submit --config=ci/cloudbuild-hello.yaml \
+#     --substitutions=_ENV=dev,SHORT_SHA=$(git rev-parse --short HEAD) .
+
+substitutions:
+  _ENV: "dev"                 # dev | staging | prod
+  _REGION: "us-east4"
+  _REPO: "stylist-docker"
+  _IMAGE_NAME: "stylist-hello"
+  _SERVICE_PREFIX: "stylist"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+
+steps:
+  # 1. Build container image
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    dir: services/hello-world
+    args:
+      - build
+      - -t
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-${SHORT_SHA}
+      - -t
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-latest
+      - --label=app=stylist-agent
+      - --label=env=${_ENV}
+      - --label=commit=${SHORT_SHA}
+      - .
+
+  # 2. Push both tags
+  - id: push-sha
+    name: gcr.io/cloud-builders/docker
+    args: [push, "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-${SHORT_SHA}"]
+  - id: push-latest
+    name: gcr.io/cloud-builders/docker
+    args: [push, "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-latest"]
+
+  # 3. Deploy to Cloud Run (env-suffixed service name)
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        gcloud run deploy ${_SERVICE_PREFIX}-${_ENV}-hello \
+          --project=${PROJECT_ID} \
+          --region=${_REGION} \
+          --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-${SHORT_SHA} \
+          --service-account=agent-orch-${_ENV}-sa@${PROJECT_ID}.iam.gserviceaccount.com \
+          --labels=app=stylist-agent,env=${_ENV},commit=${SHORT_SHA} \
+          --set-env-vars=APP_ENV=${_ENV},APP_NAME=stylist-hello,VERSION=${SHORT_SHA} \
+          --allow-unauthenticated \
+          --quiet
+
+  # 4. Smoke test the deployed service
+  - id: smoke-test
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        URL="$(gcloud run services describe ${_SERVICE_PREFIX}-${_ENV}-hello \
+          --project=${PROJECT_ID} --region=${_REGION} --format='value(status.url)')"
+        echo "Service URL: $URL"
+        for i in 1 2 3 4 5; do
+          if curl -fsS "$URL/healthz" | grep -q '"status":"ok"'; then
+            echo "PASS: /healthz returned ok"
+            exit 0
+          fi
+          echo "Retry $i in 5s..."
+          sleep 5
+        done
+        echo "FAIL: smoke test did not pass"
+        exit 1
+
+images:
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-${SHORT_SHA}"
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-latest"
+
+timeout: 1200s

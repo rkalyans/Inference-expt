@@ -1,0 +1,11 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
+
+# Find with: gcloud billing accounts list
+billing_account_id = "012345-67890A-BCDEF1"
+
+# Single-owner email (alerts, budget notifications)
+[email protected]"
+
+# Toggle Langfuse deployment after secrets are seeded.
+# Initial apply: leave false. Seed secrets, then set true and re-apply.
+deploy_langfuse = false
