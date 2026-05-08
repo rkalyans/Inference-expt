@@ -24,7 +24,7 @@ Configure a Cloud Build trigger on the `prod` workflow with `requireApproval: tr
 Run from **Cloud Shell** at <https://shell.cloud.google.com>. Cloud Build executes the build itself on Google-managed workers; Cloud Shell only submits the job.
 
 ```bash
-cd ~/stylist-agent
+cd ~/Inference-expt
 
 # Apply shared stack
 gcloud builds submit --config=ci/cloudbuild-infra.yaml \

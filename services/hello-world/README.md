@@ -10,7 +10,7 @@ runs on Cloud Run, and validates the entire delivery pipeline end-to-end.
 
 ```bash
 # In Cloud Shell, from the repo root
-cd ~/stylist-agent
+cd ~/Inference-expt
 gcloud builds submit --config=ci/cloudbuild-hello.yaml \
   --substitutions=_ENV=dev .
 ```
@@ -20,7 +20,7 @@ gcloud builds submit --config=ci/cloudbuild-hello.yaml \
 If you want to exercise the Python app without a Cloud Build round-trip, you can run it inside Cloud Shell itself (it has Python 3 + Docker):
 
 ```bash
-cd ~/stylist-agent/services/hello-world
+cd ~/Inference-expt/services/hello-world
 docker build -t stylist-hello .
 docker run --rm -p 8080:8080 -e APP_ENV=cloudshell stylist-hello &
 curl localhost:8080/healthz

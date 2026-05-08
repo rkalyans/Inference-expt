@@ -23,13 +23,13 @@ gcloud config get-value project   # should print: inference-expt
 
    **Option A — Clone from your Git remote** (preferred):
    ```bash
-   git clone https://github.com/<your-org>/stylist-agent.git ~/stylist-agent
-   cd ~/stylist-agent
+   git clone https://github.com/rkalyans/Inference-expt.git ~/Inference-expt
+   cd ~/Inference-expt
    ```
 
    **Option B — Upload via Cloud Shell's "Upload" menu** (three-dot menu → Upload), then:
    ```bash
-   cd ~/Vibe-3
+   cd ~/Inference-expt
    ```
 
 5. Set runbook environment variables for the session:
@@ -104,7 +104,7 @@ This creates: VPC, DNS zone, Artifact Registry, IAM service accounts (`terraform
 
 In Cloud Shell:
 ```bash
-cd ~/stylist-agent/infra/envs/shared
+cd ~/Inference-expt/infra/envs/shared
 cp terraform.tfvars.example terraform.tfvars
 ```
 
@@ -131,7 +131,7 @@ The domain `quantum-23.com` is registered via Cloud Domains. Point its name serv
 
 In Cloud Shell:
 ```bash
-cd ~/stylist-agent/infra/envs/shared
+cd ~/Inference-expt/infra/envs/shared
 terraform output dns_name_servers
 ```
 
@@ -165,7 +165,7 @@ dig +short NS quantum-23.com
 OpenWeatherMap key + Langfuse bootstrap secrets. Run all of this in Cloud Shell so the values never touch your laptop.
 
 ```bash
-cd ~/stylist-agent
+cd ~/Inference-expt
 
 # Paste the OpenWeatherMap key (One Call API 3.0 enabled subscription).
 # Use Cloud Shell's secure paste (right-click → Paste) so it isn't echoed in scrollback.
@@ -199,7 +199,7 @@ printf '%s' "$LANGFUSE_DATABASE_URL" | \
 
 In Cloud Shell:
 ```bash
-cd ~/stylist-agent/infra/envs/shared
+cd ~/Inference-expt/infra/envs/shared
 cloudshell edit terraform.tfvars   # set deploy_langfuse = true, save
 terraform apply
 ```
@@ -215,13 +215,13 @@ Output `langfuse_url` will give you the Cloud Run URL. Internal-only for now (`I
 All three stacks share the same module structure. Apply them in order in Cloud Shell:
 
 ```bash
-cd ~/stylist-agent/infra/envs/dev
+cd ~/Inference-expt/infra/envs/dev
 terraform init && terraform apply
 
-cd ~/stylist-agent/infra/envs/staging
+cd ~/Inference-expt/infra/envs/staging
 terraform init && terraform apply
 
-cd ~/stylist-agent/infra/envs/prod
+cd ~/Inference-expt/infra/envs/prod
 terraform init && terraform apply
 ```
 
@@ -234,7 +234,7 @@ Each stack creates: per-env IAM SAs, env-scoped GCS buckets, resource-level IAM 
 The entire build runs on Cloud Build servers — Cloud Shell only submits the job. No local Docker is invoked.
 
 ```bash
-cd ~/stylist-agent
+cd ~/Inference-expt
 
 gcloud builds submit --config=ci/cloudbuild-hello.yaml \
   --substitutions=_ENV=dev,SHORT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo manual) .
@@ -375,7 +375,7 @@ All fixes assume Cloud Shell.
 All commands in Cloud Shell.
 
 ```bash
-cd ~/stylist-agent
+cd ~/Inference-expt
 
 # Destroy in reverse order
 cd infra/envs/prod    && terraform destroy && cd -

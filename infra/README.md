@@ -20,16 +20,16 @@ shared  → dev → staging → prod
 > Run all `terraform` commands inside **Google Cloud Shell** (<https://shell.cloud.google.com>). Cloud Shell provides Terraform, ADC, and `gcloud` — no local installs needed.
 
 ```bash
-cd ~/stylist-agent/infra/envs/shared
+cd ~/Inference-expt/infra/envs/shared
 terraform init && terraform apply
 
-cd ~/stylist-agent/infra/envs/dev
+cd ~/Inference-expt/infra/envs/dev
 terraform init && terraform apply
 
-cd ~/stylist-agent/infra/envs/staging
+cd ~/Inference-expt/infra/envs/staging
 terraform init && terraform apply
 
-cd ~/stylist-agent/infra/envs/prod
+cd ~/Inference-expt/infra/envs/prod
 terraform init && terraform apply
 ```
 

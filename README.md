@@ -38,8 +38,8 @@ An agentic clothing recommender for NYC, built on open-weight models in GCP.
 gcloud config set project inference-expt
 
 # 2. Bring this repo into Cloud Shell
-git clone https://github.com/<your-org>/stylist-agent.git ~/stylist-agent
-cd ~/stylist-agent
+git clone https://github.com/rkalyans/Inference-expt.git ~/Inference-expt
+cd ~/Inference-expt
 chmod +x scripts/*.sh
 
 # 3. One-time bootstrap (state bucket + APIs)
@@ -56,7 +56,7 @@ cd ../staging && terraform init && terraform apply
 cd ../prod    && terraform init && terraform apply
 
 # 5. Deploy hello-world via Cloud Build
-cd ~/stylist-agent
+cd ~/Inference-expt
 gcloud builds submit --config=ci/cloudbuild-hello.yaml \
   --substitutions=_ENV=dev .
 
