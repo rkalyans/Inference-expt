@@ -53,7 +53,7 @@ resource "google_monitoring_notification_channel" "email" {
   type         = "email"
 
   labels = {
-    email_address = var.alert_email
+    email_address = var.owner_email
   }
 
   user_labels = var.labels
@@ -105,12 +105,12 @@ resource "google_monitoring_alert_policy" "cloud_run_5xx" {
   conditions {
     display_name = "5xx error rate"
     condition_threshold {
-      filter = <<-EOT
-        metric.type="run.googleapis.com/request_count"
-        AND resource.type="cloud_run_revision"
-        AND resource.labels.service_name=~"^stylist-"
-        AND metric.labels.response_code_class="5xx"
-      EOT
+      filter = join(" AND ", [
+        "metric.type=\"run.googleapis.com/request_count\"",
+        "resource.type=\"cloud_run_revision\"",
+        "resource.label.service_name=monitoring.regex.full_match(\"stylist-.*\")",
+        "metric.label.response_code_class=\"5xx\"",
+      ])
       duration   = "300s"
       comparison = "COMPARISON_GT"
       threshold_value = 0.01

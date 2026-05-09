@@ -60,7 +60,7 @@ module "iam_shared" {
   env        = "shared"
 }
 
-# ----- Secrets (placeholders; values seeded by scripts/05-seed-secrets.sh) -----
+# ----- Secrets (placeholders; values added manually per PHASE-0-RUNBOOK.md §6) -----
 module "secrets" {
   source     = "../../modules/secrets"
   project_id = var.project_id
@@ -102,7 +102,7 @@ module "observability" {
   project_id         = var.project_id
   region             = var.region
   billing_account_id = var.billing_account_id
-  alert_email        = var.alert_email
+  owner_email        = var.owner_email
   domain             = var.domain
   langfuse_sa_email  = google_service_account.langfuse.email
   deploy_langfuse    = var.deploy_langfuse

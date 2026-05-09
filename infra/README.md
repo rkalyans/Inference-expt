@@ -42,7 +42,7 @@ terraform init && terraform apply
 | `artifact-registry` | Docker repo for all containers |
 | `iam` | Per-env service accounts with IAM Conditions on `env` label |
 | `observability` | Log sinks, alerting policies, budget alerts, Langfuse on Cloud Run |
-| `secrets` | Secret Manager bootstrap (empty placeholders; values seeded by `scripts/05-seed-secrets.sh`) |
+| `secrets` | Secret Manager bootstrap (empty placeholders; values added manually — see PHASE-0-RUNBOOK.md §6) |
 | `cloud-run-service` | Reusable Cloud Run service (used by hello-world and later phases) |
 
 ## Mandatory labels
@@ -51,4 +51,4 @@ Every resource MUST carry:
 - `env` — `dev` | `staging` | `prod` | `shared`
 - `app` — `stylist-agent`
 
-The `scripts/03-validate-labels.sh` script enforces this in CI.
+Validation commands live in PHASE-0-RUNBOOK.md §10.2 (mandatory labels) and §10.3 (IAM scoping). Both have a Cloud Shell command form and a Console UI walkthrough.

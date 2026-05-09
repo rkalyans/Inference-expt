@@ -1,6 +1,7 @@
 /**
  * Secrets module — creates Secret Manager entries (no values).
- * Values are populated by `scripts/05-seed-secrets.sh` from local env vars.
+ * Values are added manually — see PHASE-0-RUNBOOK.md §6 (`gcloud secrets
+ * versions add ...`).
  */
 
 resource "google_secret_manager_secret" "secret" {

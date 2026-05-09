@@ -21,7 +21,6 @@ An agentic clothing recommender for NYC, built on open-weight models in GCP.
 │       ├── staging/            # env=staging resources
 │       └── prod/                # env=prod resources
 ├── ci/                         # Cloud Build pipelines
-├── scripts/                    # Bootstrap & validation scripts
 ├── services/
 │   └── hello-world/            # Phase 0 smoke-test container
 └── PHASE-0-RUNBOOK.md
@@ -40,33 +39,39 @@ gcloud config set project inference-expt
 # 2. Bring this repo into Cloud Shell
 git clone https://github.com/rkalyans/Inference-expt.git ~/Inference-expt
 cd ~/Inference-expt
-chmod +x scripts/*.sh
 
-# 3. One-time bootstrap (state bucket + APIs)
-./scripts/01-bootstrap-state.sh
-./scripts/02-enable-apis.sh
+# 3. Create the Terraform state bucket (full commands in PHASE-0-RUNBOOK.md §2)
+gcloud storage buckets create gs://inference-expt-tf-state \
+  --location=us-east4 --uniform-bucket-level-access --public-access-prevention
+gcloud storage buckets update gs://inference-expt-tf-state --versioning
 
-# 4. Apply infra
+# 4. Enable APIs (full list in PHASE-0-RUNBOOK.md §3)
+gcloud services enable run.googleapis.com container.googleapis.com \
+  storage.googleapis.com bigquery.googleapis.com cloudbuild.googleapis.com \
+  artifactregistry.googleapis.com secretmanager.googleapis.com dns.googleapis.com \
+  compute.googleapis.com logging.googleapis.com monitoring.googleapis.com \
+  cloudresourcemanager.googleapis.com iam.googleapis.com cloudbilling.googleapis.com \
+  billingbudgets.googleapis.com dlp.googleapis.com
+
+# 5. Apply infra
 cd infra/envs/shared
 cp terraform.tfvars.example terraform.tfvars
-cloudshell edit terraform.tfvars      # fill billing_account_id + alert_email
+cloudshell edit terraform.tfvars      # fill billing_account_id + owner_email
 terraform init && terraform apply
 cd ../dev     && terraform init && terraform apply
 cd ../staging && terraform init && terraform apply
 cd ../prod    && terraform init && terraform apply
 
-# 5. Deploy hello-world via Cloud Build
+# 6. Deploy hello-world via Cloud Build
 cd ~/Inference-expt
 gcloud builds submit --config=ci/cloudbuild-hello.yaml \
   --substitutions=_ENV=dev .
 
-# 6. Validate
-./scripts/03-validate-labels.sh
-./scripts/04-iam-condition-test.sh
+# 7. Validate
 curl https://dev.quantum-23.com/healthz
 ```
 
-See [`PHASE-0-RUNBOOK.md`](PHASE-0-RUNBOOK.md) for full instructions including OpenWeatherMap secret seeding, DLP enablement, and Langfuse deployment.
+See [`PHASE-0-RUNBOOK.md`](PHASE-0-RUNBOOK.md) for **full** instructions including label/IAM verification, OpenWeatherMap secret seeding, DLP enablement, and Langfuse deployment. Every step has both a Cloud Shell command form and a Console UI walkthrough.
 
 ## Confirmed Inputs
 

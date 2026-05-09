@@ -38,21 +38,31 @@ gcloud config get-value project   # should print: inference-expt
 export PROJECT_ID=inference-expt
 export REGION=us-east4
 export DOMAIN=quantum-23.com
-export ALERT_EMAIL=owner@quantum-23.com   # paste the single-owner email
+export OWNER_EMAIL=owner@quantum-23.com   # paste the single-owner email
 ```
 
-6. Make the helper scripts executable:
+6. Verify the Cloud Shell environment is healthy. Run each command and confirm the output:
 
 ```bash
-chmod +x scripts/*.sh
+# Cloud Shell tools
+gcloud version           # → prints gcloud + components
+terraform version        # → ≥ 1.6
+docker --version         # → any version (Cloud Shell has one)
+jq --version             # → any version
+
+# You're in Cloud Shell
+echo "$CLOUD_SHELL"      # → prints: true
+
+# Authenticated
+gcloud auth list                                  # → your owner email marked ACTIVE
+gcloud auth application-default print-access-token >/dev/null && echo OK   # → OK
+
+# Right project + billing on
+gcloud projects describe inference-expt --format='value(projectId)'         # → inference-expt
+gcloud billing projects describe inference-expt --format='value(billingEnabled)'   # → True
 ```
 
-7. Verify the Cloud Shell environment is healthy:
-
-```bash
-./scripts/00-prereqs.sh
-```
-Expected: `All prerequisites satisfied.` Skip the install checks — Cloud Shell guarantees them.
+If any check fails, see **Troubleshooting** at the bottom of this runbook.
 
 ---
 
@@ -82,19 +92,103 @@ You can cross-check in the Console: <https://console.cloud.google.com/billing/li
 
 ## 2. Bootstrap Terraform State Bucket
 
+Creates `gs://inference-expt-tf-state` with uniform access, versioning, and a 90-day non-current-version lifecycle rule. Idempotent (safe to re-run).
+
+### Option A — Cloud Shell commands
+
 ```bash
-./scripts/01-bootstrap-state.sh
+BUCKET="gs://inference-expt-tf-state"
+
+# Create the bucket (skip if it already exists)
+gcloud storage buckets describe "$BUCKET" >/dev/null 2>&1 || \
+  gcloud storage buckets create "$BUCKET" \
+    --project=inference-expt \
+    --location=us-east4 \
+    --uniform-bucket-level-access \
+    --public-access-prevention
+
+# Enable versioning
+gcloud storage buckets update "$BUCKET" --versioning
+
+# Apply lifecycle: delete noncurrent versions older than 90 days
+cat > /tmp/lifecycle.json <<'EOF'
+{
+  "lifecycle": {
+    "rule": [
+      { "action": {"type": "Delete"},
+        "condition": {"daysSinceNoncurrentTime": 90} }
+    ]
+  }
+}
+EOF
+gcloud storage buckets update "$BUCKET" --lifecycle-file=/tmp/lifecycle.json
+rm /tmp/lifecycle.json
+
+# Verify
+gcloud storage buckets describe "$BUCKET" \
+  --format='value(name, location, versioning.enabled, lifecycle.rule)'
 ```
-Creates `gs://inference-expt-tf-state` with versioning + lifecycle. Idempotent.
+
+### Option B — Console UI
+
+1. Open <https://console.cloud.google.com/storage/browser?project=inference-expt>.
+2. Click **Create**.
+3. **Name:** `inference-expt-tf-state` → **Continue**.
+4. **Location type:** Region → **us-east4** → **Continue**.
+5. **Storage class:** Standard → **Continue**.
+6. **Access control:** Uniform → check **Enforce public access prevention** → **Continue**.
+7. **Protection tools:** check **Object versioning** (default 100 versions is fine) → **Create**.
+8. After creation, open the bucket → **Lifecycle** tab → **Add a rule** → Action: *Delete object* → Condition: *Days since becoming noncurrent = 90* → **Create**.
 
 ---
 
 ## 3. Enable Required APIs
 
+Enables every API used through Phase 1. Takes 2–5 minutes. Idempotent.
+
+### Option A — Cloud Shell
+
 ```bash
-./scripts/02-enable-apis.sh
+gcloud services enable \
+  run.googleapis.com \
+  container.googleapis.com \
+  cloudfunctions.googleapis.com \
+  cloudscheduler.googleapis.com \
+  pubsub.googleapis.com \
+  sqladmin.googleapis.com \
+  firestore.googleapis.com \
+  storage.googleapis.com \
+  bigquery.googleapis.com \
+  redis.googleapis.com \
+  compute.googleapis.com \
+  dns.googleapis.com \
+  servicenetworking.googleapis.com \
+  vpcaccess.googleapis.com \
+  cloudbuild.googleapis.com \
+  artifactregistry.googleapis.com \
+  secretmanager.googleapis.com \
+  iam.googleapis.com \
+  iamcredentials.googleapis.com \
+  cloudresourcemanager.googleapis.com \
+  serviceusage.googleapis.com \
+  dlp.googleapis.com \
+  cloudkms.googleapis.com \
+  logging.googleapis.com \
+  monitoring.googleapis.com \
+  cloudtrace.googleapis.com \
+  cloudprofiler.googleapis.com \
+  cloudbilling.googleapis.com \
+  billingbudgets.googleapis.com \
+  aiplatform.googleapis.com \
+  --project=inference-expt
+
+# Verify count
+gcloud services list --enabled --project=inference-expt --format='value(NAME)' | wc -l
 ```
-Enables ~25 APIs. Takes 2–5 minutes. Idempotent.
+
+### Option B — Console UI
+
+Open <https://console.cloud.google.com/apis/library?project=inference-expt> and enable each API by name (search box). The same list as above. Slower; use only if you can't paste into Cloud Shell.
 
 ---
 
@@ -112,7 +206,7 @@ Open the file in the Cloud Shell Editor (graphical editor):
 ```bash
 cloudshell edit terraform.tfvars
 ```
-Fill in `billing_account_id` and `alert_email`. Leave `deploy_langfuse = false` for this first apply. Save and close.
+Fill in `billing_account_id` and `owner_email`. Leave `deploy_langfuse = false` for this first apply. Save and close.
 
 Then apply:
 ```bash
@@ -162,36 +256,55 @@ dig +short NS quantum-23.com
 
 ## 6. Seed Secrets
 
-OpenWeatherMap key + Langfuse bootstrap secrets. Run all of this in Cloud Shell so the values never touch your laptop.
+OpenWeatherMap key + Langfuse bootstrap secrets. The Terraform `shared` stack (Step 4) already created the secret containers; here we add their **values** as new versions.
+
+### Option A — Cloud Shell
 
 ```bash
-cd ~/Inference-expt
-
-# Paste the OpenWeatherMap key (One Call API 3.0 enabled subscription).
-# Use Cloud Shell's secure paste (right-click → Paste) so it isn't echoed in scrollback.
+# 1. Read the OpenWeatherMap key into the shell (silent input, no scrollback echo)
 read -s -p "OpenWeatherMap API key: " OPENWEATHERMAP_API_KEY; echo
-export OPENWEATHERMAP_API_KEY
 
-# Generate Langfuse internals (Cloud Shell has openssl)
-export LANGFUSE_NEXTAUTH_SECRET="$(openssl rand -base64 32)"
-export LANGFUSE_SALT="$(openssl rand -base64 32)"
-# Database URL — placeholder for Phase 0; real Cloud SQL backing comes in Phase 1
-export LANGFUSE_DATABASE_URL="postgresql://placeholder:placeholder@localhost/langfuse"
+# 2. Probe One Call API 3.0 to confirm the key + subscription tier are valid
+curl -s -o /tmp/owm.json -w 'HTTP %{http_code}\n' \
+  "https://api.openweathermap.org/data/3.0/onecall?lat=40.7580&lon=-73.9855&exclude=minutely,alerts&appid=$OPENWEATHERMAP_API_KEY"
+# Expected: HTTP 200. If 401 → wrong key. If 401 with "Invalid API key" + One Call missing
+# message → your subscription doesn't include One Call API 3.0; upgrade on openweathermap.org.
+rm /tmp/owm.json
 
-./scripts/05-seed-secrets.sh
+# 3. Store it as a new version of the Terraform-managed secret
+printf '%s' "$OPENWEATHERMAP_API_KEY" | \
+  gcloud secrets versions add openweathermap-api-key --data-file=- --project=inference-expt
+unset OPENWEATHERMAP_API_KEY
+
+# 4. Generate + store Langfuse internals
+printf '%s' "$(openssl rand -base64 32)" | \
+  gcloud secrets versions add langfuse-nextauth-secret --data-file=- --project=inference-expt
+printf '%s' "$(openssl rand -base64 32)" | \
+  gcloud secrets versions add langfuse-salt --data-file=- --project=inference-expt
+
+# 5. Placeholder DB URL (real Cloud SQL backing comes in Phase 1)
+printf '%s' "postgresql://placeholder:placeholder@localhost/langfuse" | \
+  gcloud secrets versions add langfuse-database-url --data-file=- --project=inference-expt
+
+# 6. Confirm every secret has ≥ 1 version
+for s in openweathermap-api-key langfuse-nextauth-secret langfuse-salt langfuse-database-url; do
+  echo -n "$s: "
+  gcloud secrets versions list "$s" --project=inference-expt --format='value(name)' | wc -l
+done
+# Each line should show a count ≥ 1.
 ```
 
-The script also probes `https://api.openweathermap.org/data/3.0/onecall` to confirm One Call API 3.0 is reachable with your key.
+### Option B — Console UI
 
-Add the additional Langfuse secrets:
-```bash
-printf '%s' "$LANGFUSE_NEXTAUTH_SECRET" | \
-  gcloud secrets versions add langfuse-nextauth-secret --data-file=-
-printf '%s' "$LANGFUSE_SALT" | \
-  gcloud secrets versions add langfuse-salt --data-file=-
-printf '%s' "$LANGFUSE_DATABASE_URL" | \
-  gcloud secrets versions add langfuse-database-url --data-file=-
-```
+1. Open <https://console.cloud.google.com/security/secret-manager?project=inference-expt>.
+2. For each secret (`openweathermap-api-key`, `langfuse-nextauth-secret`, `langfuse-salt`, `langfuse-database-url`):
+   - Click the secret → **+ NEW VERSION**.
+   - Paste the value into **Secret value** → **ADD NEW VERSION**.
+3. Validate the OpenWeatherMap key in a Cloud Shell tab:
+   ```bash
+   curl "https://api.openweathermap.org/data/3.0/onecall?lat=40.7580&lon=-73.9855&exclude=minutely,alerts&appid=<paste-key>"
+   ```
+   Expect HTTP 200 with a JSON body.
 
 ---
 
@@ -272,18 +385,63 @@ Or in the Console: <https://console.cloud.google.com/run?project=inference-expt>
 > **First request after deploy:** the Google-managed SSL cert may take 15–60 min to provision after the domain mapping is created. You'll get a TLS error until then. Plain `https://<service>-<hash>.run.app/healthz` works immediately.
 
 ### 10.2 Mandatory labels
+
+Every `stylist-*` resource must carry `app=stylist-agent` and `env=<dev|staging|prod|shared>`.
+
+#### Cloud Shell
+
 ```bash
-./scripts/03-validate-labels.sh
+PROJECT=inference-expt
+
+# Cloud Run services — must show app + env
+gcloud run services list --project=$PROJECT --format='value(metadata.name)' | \
+  grep '^stylist-' | while read svc; do
+    echo "== $svc"
+    gcloud run services describe "$svc" --project=$PROJECT --region=us-east4 \
+      --format='value(metadata.labels.app, metadata.labels.env)'
+  done
+# Each service should print: stylist-agent\t<env>
+
+# GCS buckets — must show app + env
+gcloud storage buckets list --project=$PROJECT --format=json | \
+  jq -r '.[] | select(.name | startswith("stylist-")) | "\(.name)\tapp=\(.labels.app // "MISSING")\tenv=\(.labels.env // "MISSING")"'
+# No row should contain MISSING.
 ```
-Expected: `PASS: All stylist-* resources have the required labels.`
+
+#### Console UI
+
+- Cloud Run: <https://console.cloud.google.com/run?project=inference-expt> → click each `stylist-*` service → **Details** tab → confirm **Labels** include `app=stylist-agent` + the right `env`.
+- GCS: <https://console.cloud.google.com/storage/browser?project=inference-expt> → click each `stylist-*` bucket → **Configuration** tab → confirm **Labels** show both.
 
 ### 10.3 IAM scoping (the key safety property)
-```bash
-./scripts/04-iam-condition-test.sh
-```
-Expected: `PASS: dev SA correctly denied access to prod bucket.`
 
-If this fails, prod is over-permissive — investigate immediately.
+The dev runtime service account **must not** be able to read prod resources. We test this by impersonating the dev SA and trying to list a prod bucket.
+
+#### Cloud Shell
+
+```bash
+DEV_SA="agent-orch-dev-sa@inference-expt.iam.gserviceaccount.com"
+PROD_BUCKET="gs://stylist-prod-clothing-photos"
+
+gcloud storage ls "$PROD_BUCKET" --impersonate-service-account="$DEV_SA"
+```
+
+**Expected:** the command **fails** with `permission denied` / `403 Forbidden`. That's the desired outcome — prod is correctly walled off.
+
+If the command succeeds, prod is over-permissive. Investigate:
+```bash
+# What roles does the dev SA have on the prod bucket?
+gcloud storage buckets get-iam-policy gs://stylist-prod-clothing-photos \
+  --format=json | jq '.bindings[] | select(.members[]? | contains("agent-orch-dev-sa"))'
+# Should return empty. If anything appears, remove that binding immediately.
+```
+
+#### Console UI
+
+1. Open <https://console.cloud.google.com/iam-admin/iam?project=inference-expt>.
+2. Filter by **Principal:** `agent-orch-dev-sa`.
+3. Confirm: **no** roles appear scoped to prod resources.
+4. For each `stylist-prod-*` bucket at <https://console.cloud.google.com/storage/browser?project=inference-expt>: open the bucket → **Permissions** tab → confirm `agent-orch-dev-sa` is **not listed**.
 
 ### 10.4 Logs and metrics
 

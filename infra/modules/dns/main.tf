@@ -28,7 +28,7 @@ resource "google_dns_record_set" "placeholder_root" {
   name         = "${var.domain}."
   type         = "TXT"
   ttl          = 300
-  rrdatas      = ["\"stylist-agent placeholder — Phase 0 bootstrap\""]
+  rrdatas      = ["\"stylist-agent placeholder - Phase 0 bootstrap\""]
 }
 
 # Internal private zone for service-to-service discovery (e.g. langfuse.internal.quantum-23.com)

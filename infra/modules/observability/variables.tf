@@ -11,7 +11,7 @@ variable "billing_account_id" {
   description = "Numeric ID of Billing-Account-Agentic (e.g. 012345-67890A-BCDEF1)"
 }
 
-variable "alert_email" {
+variable "owner_email" {
   type        = string
   description = "Single-owner alert email"
 }

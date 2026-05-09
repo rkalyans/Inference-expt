@@ -8,7 +8,8 @@
  *     by the modules that own those resources (e.g. a GCS bucket grants
  *     objectAdmin to its env's SA only).
  *   • This guarantees that agent-orch-dev-sa cannot touch prod resources
- *     because no binding exists — verifiable via scripts/04-iam-condition-test.sh.
+ *     because no binding exists — verifiable via the impersonation test in
+ *     PHASE-0-RUNBOOK.md §10.3.
  *
  * Resource Tags (env=dev|staging|prod) are also created here for any future
  * IAM Condition use cases or VPC-SC perimeter scoping.
@@ -57,8 +58,13 @@ resource "google_project_iam_member" "terraform_roles" {
     "roles/editor",
     "roles/resourcemanager.projectIamAdmin",
     "roles/iam.serviceAccountAdmin",
-    "roles/billing.user",
     "roles/dns.admin",
+    # NOTE: roles/billing.user is a billing-account-level role, not project-level.
+    # If you need terraform-sa to create budgets, grant it at the billing account:
+    #   gcloud billing accounts add-iam-policy-binding $BILLING_ACCOUNT_ID \
+    #     --member="serviceAccount:terraform-sa@inference-expt.iam.gserviceaccount.com" \
+    #     --role="roles/billing.user"
+    # In Phase 0 the human owner runs `terraform apply` directly, so this is unnecessary.
   ]) : []
 
   project = var.project_id
