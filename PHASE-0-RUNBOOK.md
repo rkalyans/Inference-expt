@@ -194,7 +194,7 @@ Open <https://console.cloud.google.com/apis/library?project=inference-expt> and 
 
 ## 4. Apply Shared Terraform Stack
 
-This creates: VPC, DNS zone, Artifact Registry, IAM service accounts (`terraform-sa`, `cloudbuild-sa`, Langfuse SA), Secret Manager placeholders, BigQuery ops dataset, log sinks, baseline alerting, budgets.
+This creates: VPC, DNS zone, Artifact Registry, IAM service accounts (`terraform-sa`, `cloudbuild-sa`), Secret Manager placeholders, BigQuery ops dataset, log sinks, baseline alerting, per-env budgets.
 
 In Cloud Shell:
 ```bash
@@ -206,7 +206,7 @@ Open the file in the Cloud Shell Editor (graphical editor):
 ```bash
 cloudshell edit terraform.tfvars
 ```
-Fill in `billing_account_id` and `owner_email`. Leave `deploy_langfuse = false` for this first apply. Save and close.
+Fill in `billing_account_id` and `owner_email`. Save and close.
 
 Then apply:
 ```bash
@@ -256,74 +256,92 @@ dig +short NS quantum-23.com
 
 ## 6. Seed Secrets
 
-OpenWeatherMap key + Langfuse bootstrap secrets. The Terraform `shared` stack (Step 4) already created the secret containers; here we add their **values** as new versions.
+The `shared` Terraform stack (Step 4) already created four empty secret containers in Secret Manager:
 
-### Option A — Cloud Shell
+- `openweathermap-api-key`
+- `langfuse-public-key`
+- `langfuse-secret-key`
+- `langfuse-host`
+
+Now we add their **values** as new versions. Langfuse runs as **SaaS** at <https://cloud.langfuse.com> (no self-hosted server).
+
+### 6.1 Get the values
+
+**OpenWeatherMap** (One Call API 3.0):
+1. Sign in at <https://home.openweathermap.org/api_keys>.
+2. Confirm your subscription includes **One Call API 3.0** (free tier requires the "One Call by Call" subscription, with a 1k-call/day cap and a billing card on file). If you only see "Current weather" or "5 day forecast", upgrade at <https://home.openweathermap.org/subscriptions>.
+3. Copy the API key.
+
+**Langfuse Cloud**:
+1. Sign in at <https://cloud.langfuse.com>.
+2. Open (or create) the project `stylist-agent`.
+3. Left nav → **Settings** → **API Keys** → **Create new API keys**.
+4. Copy:
+   - **Public Key** — `pk-lf-…`
+   - **Secret Key** — `sk-lf-…` (shown **once**, copy immediately).
+5. Note your region's host:
+   - US: `https://us.cloud.langfuse.com`
+   - EU: `https://cloud.langfuse.com`
+
+### 6.2 Option A — Cloud Shell
 
 ```bash
-# 1. Read the OpenWeatherMap key into the shell (silent input, no scrollback echo)
-read -s -p "OpenWeatherMap API key: " OPENWEATHERMAP_API_KEY; echo
+PROJECT=inference-expt
 
-# 2. Probe One Call API 3.0 to confirm the key + subscription tier are valid
-curl -s -o /tmp/owm.json -w 'HTTP %{http_code}\n' \
-  "https://api.openweathermap.org/data/3.0/onecall?lat=40.7580&lon=-73.9855&exclude=minutely,alerts&appid=$OPENWEATHERMAP_API_KEY"
-# Expected: HTTP 200. If 401 → wrong key. If 401 with "Invalid API key" + One Call missing
-# message → your subscription doesn't include One Call API 3.0; upgrade on openweathermap.org.
-rm /tmp/owm.json
+# --- OpenWeatherMap ---
+read -s -p "OpenWeatherMap API key: " OWM_KEY; echo
 
-# 3. Store it as a new version of the Terraform-managed secret
-printf '%s' "$OPENWEATHERMAP_API_KEY" | \
-  gcloud secrets versions add openweathermap-api-key --data-file=- --project=inference-expt
-unset OPENWEATHERMAP_API_KEY
+# Validate One Call API 3.0 reachability
+curl -s -o /dev/null -w 'OWM probe: HTTP %{http_code}\n' \
+  "https://api.openweathermap.org/data/3.0/onecall?lat=40.7580&lon=-73.9855&exclude=minutely,alerts&appid=$OWM_KEY"
+# Expect HTTP 200. 401 → wrong key or subscription missing One Call 3.0.
 
-# 4. Generate + store Langfuse internals
-printf '%s' "$(openssl rand -base64 32)" | \
-  gcloud secrets versions add langfuse-nextauth-secret --data-file=- --project=inference-expt
-printf '%s' "$(openssl rand -base64 32)" | \
-  gcloud secrets versions add langfuse-salt --data-file=- --project=inference-expt
+printf '%s' "$OWM_KEY" | \
+  gcloud secrets versions add openweathermap-api-key --data-file=- --project=$PROJECT
+unset OWM_KEY
 
-# 5. Placeholder DB URL (real Cloud SQL backing comes in Phase 1)
-printf '%s' "postgresql://placeholder:placeholder@localhost/langfuse" | \
-  gcloud secrets versions add langfuse-database-url --data-file=- --project=inference-expt
+# --- Langfuse Cloud ---
+read -s -p "Langfuse Public Key (pk-lf-...): " LF_PUB; echo
+read -s -p "Langfuse Secret Key (sk-lf-...): " LF_SEC; echo
+read    -p "Langfuse Host [https://us.cloud.langfuse.com]: " LF_HOST
+LF_HOST=${LF_HOST:-https://us.cloud.langfuse.com}
 
-# 6. Confirm every secret has ≥ 1 version
-for s in openweathermap-api-key langfuse-nextauth-secret langfuse-salt langfuse-database-url; do
-  echo -n "$s: "
-  gcloud secrets versions list "$s" --project=inference-expt --format='value(name)' | wc -l
+printf '%s' "$LF_PUB"  | gcloud secrets versions add langfuse-public-key --data-file=- --project=$PROJECT
+printf '%s' "$LF_SEC"  | gcloud secrets versions add langfuse-secret-key --data-file=- --project=$PROJECT
+printf '%s' "$LF_HOST" | gcloud secrets versions add langfuse-host       --data-file=- --project=$PROJECT
+unset LF_PUB LF_SEC LF_HOST
+
+# --- Verify each secret has ≥ 1 version ---
+for s in openweathermap-api-key langfuse-public-key langfuse-secret-key langfuse-host; do
+  count=$(gcloud secrets versions list "$s" --project=$PROJECT --format='value(name)' | wc -l | tr -d ' ')
+  echo "$s: $count version(s)"
 done
-# Each line should show a count ≥ 1.
+# Each should show ≥ 1.
 ```
 
-### Option B — Console UI
+### 6.3 Option B — Console UI
 
 1. Open <https://console.cloud.google.com/security/secret-manager?project=inference-expt>.
-2. For each secret (`openweathermap-api-key`, `langfuse-nextauth-secret`, `langfuse-salt`, `langfuse-database-url`):
+2. For each of `openweathermap-api-key`, `langfuse-public-key`, `langfuse-secret-key`, `langfuse-host`:
    - Click the secret → **+ NEW VERSION**.
    - Paste the value into **Secret value** → **ADD NEW VERSION**.
-3. Validate the OpenWeatherMap key in a Cloud Shell tab:
+3. Validate the OpenWeatherMap key from a Cloud Shell tab:
    ```bash
-   curl "https://api.openweathermap.org/data/3.0/onecall?lat=40.7580&lon=-73.9855&exclude=minutely,alerts&appid=<paste-key>"
+   curl -s -o /dev/null -w 'HTTP %{http_code}\n' \
+     "https://api.openweathermap.org/data/3.0/onecall?lat=40.7580&lon=-73.9855&exclude=minutely,alerts&appid=<paste-key>"
    ```
-   Expect HTTP 200 with a JSON body.
+   Expect `HTTP 200`.
+4. Validate the Langfuse credentials from a Cloud Shell tab:
+   ```bash
+   curl -s -o /dev/null -w 'HTTP %{http_code}\n' \
+     -u "<pk-lf-...>:<sk-lf-...>" \
+     "https://us.cloud.langfuse.com/api/public/projects"
+   ```
+   Expect `HTTP 200` with a JSON list of projects.
 
 ---
 
-## 7. (Optional) Re-Apply Shared Stack with Langfuse Enabled
-
-In Cloud Shell:
-```bash
-cd ~/Inference-expt/infra/envs/shared
-cloudshell edit terraform.tfvars   # set deploy_langfuse = true, save
-terraform apply
-```
-
-Output `langfuse_url` will give you the Cloud Run URL. Internal-only for now (`INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER`).
-
-> **Note:** The doc plans Langfuse on GKE. To keep Phase 0 idle cost ~$30/mo we deploy on Cloud Run + a placeholder DB. Re-platform to GKE in Phase 1.2 when GKE is provisioned for inference.
-
----
-
-## 8. Apply Per-Env Stacks
+## 7. Apply Per-Env Stacks
 
 All three stacks share the same module structure. Apply them in order in Cloud Shell:
 
@@ -342,7 +360,7 @@ Each stack creates: per-env IAM SAs, env-scoped GCS buckets, resource-level IAM 
 
 ---
 
-## 9. Build & Deploy Hello-World via Cloud Build
+## 8. Build & Deploy Hello-World via Cloud Build
 
 The entire build runs on Cloud Build servers — Cloud Shell only submits the job. No local Docker is invoked.
 
@@ -369,11 +387,11 @@ gcloud builds submit --config=ci/cloudbuild-hello.yaml --substitutions=_ENV=prod
 
 ---
 
-## 10. Validate End-to-End
+## 9. Validate End-to-End
 
 All validation commands run in Cloud Shell.
 
-### 10.1 Hit the public URLs
+### 9.1 Hit the public URLs
 ```bash
 curl https://dev.quantum-23.com/healthz
 curl https://staging.quantum-23.com/healthz
@@ -384,7 +402,7 @@ Or in the Console: <https://console.cloud.google.com/run?project=inference-expt>
 
 > **First request after deploy:** the Google-managed SSL cert may take 15–60 min to provision after the domain mapping is created. You'll get a TLS error until then. Plain `https://<service>-<hash>.run.app/healthz` works immediately.
 
-### 10.2 Mandatory labels
+### 9.2 Mandatory labels
 
 Every `stylist-*` resource must carry `app=stylist-agent` and `env=<dev|staging|prod|shared>`.
 
@@ -413,7 +431,7 @@ gcloud storage buckets list --project=$PROJECT --format=json | \
 - Cloud Run: <https://console.cloud.google.com/run?project=inference-expt> → click each `stylist-*` service → **Details** tab → confirm **Labels** include `app=stylist-agent` + the right `env`.
 - GCS: <https://console.cloud.google.com/storage/browser?project=inference-expt> → click each `stylist-*` bucket → **Configuration** tab → confirm **Labels** show both.
 
-### 10.3 IAM scoping (the key safety property)
+### 9.3 IAM scoping (the key safety property)
 
 The dev runtime service account **must not** be able to read prod resources. We test this by impersonating the dev SA and trying to list a prod bucket.
 
@@ -443,7 +461,7 @@ gcloud storage buckets get-iam-policy gs://stylist-prod-clothing-photos \
 3. Confirm: **no** roles appear scoped to prod resources.
 4. For each `stylist-prod-*` bucket at <https://console.cloud.google.com/storage/browser?project=inference-expt>: open the bucket → **Permissions** tab → confirm `agent-orch-dev-sa` is **not listed**.
 
-### 10.4 Logs and metrics
+### 9.4 Logs and metrics
 
 Cloud Shell:
 ```bash
@@ -460,7 +478,7 @@ Or Console:
 - Logs: <https://console.cloud.google.com/logs/query;query=labels.app%3D%22stylist-agent%22?project=inference-expt>
 - Metrics: <https://console.cloud.google.com/monitoring/dashboards?project=inference-expt>
 
-### 10.5 Budget alerts
+### 9.5 Budget alerts
 
 Cloud Shell:
 ```bash
@@ -472,7 +490,7 @@ Or Console: <https://console.cloud.google.com/billing/budgets>
 
 ---
 
-## 11. DLP Smoke Test (Person Detection)
+## 10. DLP Smoke Test (Person Detection)
 
 Verifies the data-scope guardrail works. Cloud Shell:
 
@@ -488,23 +506,23 @@ The full DLP-on-upload Cloud Function is implemented in Phase 1.3 alongside the 
 
 ---
 
-## 12. Phase 0 Exit Checklist
+## 11. Phase 0 Exit Checklist
 
 All boxes can be ticked from Cloud Shell or the Console. Tick each item off `docs/DEPLOYMENT-PLAN.md` § 0.6:
 
 - [ ] `inference-expt` linked to `Billing-Account-Agentic` (Step 1)
 - [ ] `quantum-23.com` registered in Cloud Domains, NS records propagated (Step 5)
-- [ ] Terraform applies cleanly to `shared`, `dev`, `staging`, `prod` (Steps 4 + 8)
-- [ ] All resources carry mandatory labels (Step 10.2)
-- [ ] Cloud Build can build/push/deploy hello-world (Step 9)
-- [ ] `dev.quantum-23.com` resolves and serves 200 (Step 10.1)
-- [ ] Logs and metrics flowing (Step 10.4)
-- [ ] Langfuse reachable internally (Step 7)
+- [ ] Terraform applies cleanly to `shared`, `dev`, `staging`, `prod` (Steps 4 + 7)
+- [ ] All resources carry mandatory labels (Step 9.2)
+- [ ] Cloud Build can build/push/deploy hello-world (Step 8)
+- [ ] `dev.quantum-23.com` resolves and serves 200 (Step 9.1)
+- [ ] Logs and metrics flowing (Step 9.4)
+- [ ] Langfuse Cloud project + API keys created and stored in Secret Manager (Step 6)
 - [ ] OpenWeatherMap key validated and stored (Step 6)
-- [ ] All secrets in Secret Manager (Step 6)
-- [ ] Per-env budget alerts active (Step 10.5)
-- [ ] DLP API enabled and probed (Step 11)
-- [ ] IAM scoping verified — dev SA cannot read prod (Step 10.3)
+- [ ] All four secrets have a version (Step 6)
+- [ ] Per-env budget alerts active (Step 9.5)
+- [ ] DLP API enabled and probed (Step 10)
+- [ ] IAM scoping verified — dev SA cannot read prod (Step 9.3)
 
 When all are checked: **Phase 0 is complete. Proceed to Phase 1.**
 
@@ -520,8 +538,9 @@ All fixes assume Cloud Shell.
 | Domain mapping stuck `PENDING` | DNS NS records not yet at registrar | Wait, re-run `dig +short NS quantum-23.com` |
 | TLS error on `dev.quantum-23.com` | Managed cert still provisioning | Wait 15–60 min after first successful DNS resolution |
 | Cloud Build `denied: Permission` to push | `cloudbuild-sa` missing AR Writer | Re-apply `shared` stack; check IAM bindings |
-| `04-iam-condition-test.sh` PASSES but seems wrong | dev SA may genuinely not exist yet | Confirm dev stack applied: `cd infra/envs/dev && terraform output` |
+| IAM impersonation test (§9.3) succeeds when it should fail | dev SA may genuinely not exist yet | Confirm dev stack applied: `cd infra/envs/dev && terraform output` |
 | OpenWeatherMap key returns 401 | One Call API 3.0 not on subscription | Upgrade subscription tier on openweathermap.org |
+| Langfuse `/api/public/projects` returns 401 | Wrong public/secret key pair, or wrong host (US vs EU) | Re-copy the keys; confirm host matches the Langfuse Cloud region |
 | `cloud-domains.googleapis.com` not enabled | Domain wasn't bought via Cloud Domains | If registered elsewhere, manually update NS records at the external registrar |
 | Cloud Shell disk full | Default 5GB home disk filled by Terraform plugins | `rm -rf infra/**/.terraform` and re-init only the stack you need |
 | Cloud Shell session timed out mid-apply | Default 1hr inactivity timeout | Reopen Cloud Shell, run `terraform plan` to see what's left, then re-apply |

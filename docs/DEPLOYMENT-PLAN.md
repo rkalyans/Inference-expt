@@ -124,9 +124,9 @@ infra/
 │   ├── storage/           (GCS buckets, Artifact Registry)
 │   ├── dns/               (Cloud DNS records, managed SSL certs — applied once)
 │   ├── iam/               (per-env service accounts with IAM Conditions)
-│   └── observability/     (Langfuse on GKE, log sinks, alerting)
+│   └── observability/     (BigQuery ops dataset, log sinks, budget alerts — Langfuse runs as SaaS)
 ├── envs/
-│   ├── shared/main.tf     (project-wide: VPC, DNS zone, Artifact Registry, Langfuse)
+│   ├── shared/main.tf     (project-wide: VPC, DNS zone, Artifact Registry, Secret Manager)
 │   ├── dev/main.tf        (env=dev resources within inference-expt)
 │   ├── staging/main.tf    (env=staging resources within inference-expt)
 │   └── prod/main.tf       (env=prod resources within inference-expt)
@@ -169,12 +169,14 @@ infra/
    - GKE GPU pod restart loop → PagerDuty
    - Cloud SQL connection failures → email
    - Billing on `Billing-Account-Agentic` > budget threshold → email + Slack
-4. Deploy **Langfuse** (open-source) to GKE on a small CPU pod for agent tracing
-   - Internal endpoint: `langfuse.internal.quantum-23.com` (private DNS)
-5. Store Langfuse keys + OpenWeatherMap API key in Secret Manager (no plaintext anywhere):
+4. Use **Langfuse Cloud** (SaaS) for agent tracing — sign in at <https://cloud.langfuse.com>, create project `stylist-agent`, generate API keys.
+   - No self-hosted server in Phase 0–2 (saves ~$30/mo idle + a Cloud SQL instance).
+   - If data residency requires self-hosting later, re-platform to GKE in a future phase.
+5. Store Langfuse Cloud keys + OpenWeatherMap API key in Secret Manager (no plaintext anywhere):
    - `openweathermap-api-key`
-   - `langfuse-public-key`
-   - `langfuse-secret-key`
+   - `langfuse-public-key`   (`pk-lf-...` from cloud.langfuse.com)
+   - `langfuse-secret-key`   (`sk-lf-...` from cloud.langfuse.com)
+   - `langfuse-host`         (`https://us.cloud.langfuse.com` or EU equivalent)
 
 ## 0.6 Phase 0 Exit Criteria
 
@@ -185,7 +187,7 @@ infra/
 - [ ] Cloud Build can build and push a "hello world" container to Artifact Registry
 - [ ] Cloud Build can deploy that container to Cloud Run in dev (`dev.quantum-23.com` resolves)
 - [ ] Logs and metrics flowing to Cloud Monitoring with env-scoped dashboards
-- [ ] Langfuse reachable via internal endpoint
+- [ ] Langfuse Cloud project created; public/secret keys + host stored in Secret Manager
 - [ ] OpenWeatherMap API key validated against the API and stored in Secret Manager
 - [ ] All secrets stored in Secret Manager (no secrets in code/Terraform/env files)
 - [ ] Per-env budget alerts active (label-filtered)

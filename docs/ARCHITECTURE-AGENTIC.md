@@ -672,7 +672,7 @@ Since agentic systems are harder to debug, we add:
 │  OBSERVABILITY STACK                                    │
 │                                                        │
 │  ┌────────────────────────────────────────────────┐   │
-│  │  LangSmith (or self-hosted Langfuse)            │   │
+│  │  Langfuse Cloud (SaaS) — chosen backend         │   │
 │  │  • Traces every agent step                      │   │
 │  │  • Shows tool calls + reasoning                 │   │
 │  │  • Latency per step                             │   │
@@ -681,11 +681,10 @@ Since agentic systems are harder to debug, we add:
 │  └────────────────────────────────────────────────┘   │
 │                                                        │
 │  ┌────────────────────────────────────────────────┐   │
-│  │  Langfuse (open-source alternative)             │   │
-│  │  • Self-hosted on GKE (no vendor dependency)    │   │
-│  │  • Full trace visibility                        │   │
-│  │  • Cost tracking per request                    │   │
-│  │  • User feedback correlation                    │   │
+│  │  Self-host fallback (deferred)                  │   │
+│  │  • If data residency demands it later, run      │   │
+│  │    Langfuse on GKE + Cloud SQL Postgres         │   │
+│  │  • Out of scope for Phase 0–2                   │   │
 │  └────────────────────────────────────────────────┘   │
 │                                                        │
 │  ┌────────────────────────────────────────────────┐   │
@@ -721,7 +720,7 @@ Since agentic systems are harder to debug, we add:
 | **Agent Orchestration** | LangGraph (state machine for multi-agent flows) |
 | **Agent Memory** | Firestore (via LangGraph Store) |
 | **Agent Filesystem** | Cloud Storage backend (GCS) |
-| **Agent Tracing** | Langfuse (self-hosted, open-source) |
+| **Agent Tracing** | Langfuse Cloud (SaaS) — `cloud.langfuse.com`; self-host on GKE only if data residency requires it |
 | **LLM (Agent Brain)** | Mistral-7B-Instruct + LoRA (via vLLM) |
 | **Vision LLM** | LLaVA-NeXT-13B (via vLLM, called as tool) |
 | **Detection/Embedding** | YOLOv8 + SAM-2 + CLIP + FashionCLIP (Triton) |
@@ -749,7 +748,7 @@ Since agentic systems are harder to debug, we add:
 9. Street feed pipeline (YOLO + SAM + LLaVA + FashionCLIP → trend tool)
 10. LoRA fine-tuning pipeline for agent reasoning
 11. Shopping suggestion tool
-12. Langfuse tracing integration
+12. Langfuse Cloud tracing integration (SaaS)
 
 ### Phase 3 — Personalization & Polish
 13. Advanced memory (pattern detection across sessions)

@@ -26,22 +26,6 @@ variable "budgets" {
   }
 }
 
-variable "domain" {
-  type    = string
-  default = "quantum-23.com"
-}
-
-variable "deploy_langfuse" {
-  type        = bool
-  default     = true
-}
-
-variable "langfuse_sa_email" {
-  type        = string
-  default     = ""
-  description = "Service account for Langfuse Cloud Run (must have Cloud SQL Client + Secret Accessor)"
-}
-
 variable "labels" {
   type    = map(string)
   default = {}

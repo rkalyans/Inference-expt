@@ -41,7 +41,7 @@ terraform init && terraform apply
 | `dns` | Cloud DNS managed zone for `quantum-23.com` |
 | `artifact-registry` | Docker repo for all containers |
 | `iam` | Per-env service accounts with IAM Conditions on `env` label |
-| `observability` | Log sinks, alerting policies, budget alerts, Langfuse on Cloud Run |
+| `observability` | Log sinks, alerting policies, per-env budget alerts, BigQuery ops dataset (Langfuse runs as SaaS) |
 | `secrets` | Secret Manager bootstrap (empty placeholders; values added manually — see PHASE-0-RUNBOOK.md §6) |
 | `cloud-run-service` | Reusable Cloud Run service (used by hello-world and later phases) |
 
@@ -51,4 +51,4 @@ Every resource MUST carry:
 - `env` — `dev` | `staging` | `prod` | `shared`
 - `app` — `stylist-agent`
 
-Validation commands live in PHASE-0-RUNBOOK.md §10.2 (mandatory labels) and §10.3 (IAM scoping). Both have a Cloud Shell command form and a Console UI walkthrough.
+Validation commands live in PHASE-0-RUNBOOK.md §9.2 (mandatory labels) and §9.3 (IAM scoping). Both have a Cloud Shell command form and a Console UI walkthrough.

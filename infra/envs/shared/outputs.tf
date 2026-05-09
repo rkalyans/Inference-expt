@@ -26,7 +26,3 @@ output "cloudbuild_sa" {
 output "terraform_sa" {
   value = module.iam_shared.terraform_sa_email
 }
-
-output "langfuse_url" {
-  value = module.observability.langfuse_url
-}

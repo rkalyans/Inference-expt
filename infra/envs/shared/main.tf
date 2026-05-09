@@ -2,7 +2,10 @@
  * Shared stack — project-wide foundation.
  *
  * Creates: VPC + subnets, DNS zones, Artifact Registry, IAM SAs,
- * Secret Manager placeholders, ops analytics + budgets + Langfuse.
+ * Secret Manager placeholders, ops analytics + budgets.
+ *
+ * Observability backend is Langfuse Cloud (SaaS) — we only store the three
+ * client credentials in Secret Manager. No self-hosted Langfuse server.
  *
  * Apply this BEFORE any env stack.
  */
@@ -67,45 +70,24 @@ module "secrets" {
 
   secret_names = [
     "openweathermap-api-key",
+    # Langfuse Cloud (SaaS) client credentials — paste from
+    # https://cloud.langfuse.com → Settings → API Keys
     "langfuse-public-key",
     "langfuse-secret-key",
-    "langfuse-database-url",
-    "langfuse-nextauth-secret",
-    "langfuse-salt",
+    "langfuse-host",
   ]
 
   labels = local.common_labels
 }
 
-# ----- Service account for Langfuse Cloud Run -----
-resource "google_service_account" "langfuse" {
-  project      = var.project_id
-  account_id   = "stylist-langfuse-sa"
-  display_name = "Langfuse Cloud Run"
-}
-
-resource "google_project_iam_member" "langfuse_secret_accessor" {
-  project = var.project_id
-  role    = "roles/secretmanager.secretAccessor"
-  member  = "serviceAccount:${google_service_account.langfuse.email}"
-}
-
-resource "google_project_iam_member" "langfuse_logs" {
-  project = var.project_id
-  role    = "roles/logging.logWriter"
-  member  = "serviceAccount:${google_service_account.langfuse.email}"
-}
-
-# ----- Observability (budgets, log sinks, alert policies, Langfuse) -----
+# ----- Observability (budgets, log sinks, alert policies) -----
+# Langfuse runs as SaaS (cloud.langfuse.com); not deployed here.
 module "observability" {
   source             = "../../modules/observability"
   project_id         = var.project_id
   region             = var.region
   billing_account_id = var.billing_account_id
   owner_email        = var.owner_email
-  domain             = var.domain
-  langfuse_sa_email  = google_service_account.langfuse.email
-  deploy_langfuse    = var.deploy_langfuse
 
   budgets = {
     dev     = "100"

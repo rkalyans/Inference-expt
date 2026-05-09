@@ -71,7 +71,7 @@ gcloud builds submit --config=ci/cloudbuild-hello.yaml \
 curl https://dev.quantum-23.com/healthz
 ```
 
-See [`PHASE-0-RUNBOOK.md`](PHASE-0-RUNBOOK.md) for **full** instructions including label/IAM verification, OpenWeatherMap secret seeding, DLP enablement, and Langfuse deployment. Every step has both a Cloud Shell command form and a Console UI walkthrough.
+See [`PHASE-0-RUNBOOK.md`](PHASE-0-RUNBOOK.md) for **full** instructions including label/IAM verification, OpenWeatherMap + Langfuse Cloud secret seeding, and DLP enablement. Every step has both a Cloud Shell command form and a Console UI walkthrough.
 
 ## Confirmed Inputs
 

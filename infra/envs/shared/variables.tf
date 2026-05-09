@@ -22,8 +22,3 @@ variable "owner_email" {
   type        = string
   description = "Single-owner email for alerts and budget notifications"
 }
-
-variable "deploy_langfuse" {
-  type    = bool
-  default = false # set true after secrets are seeded
-}
