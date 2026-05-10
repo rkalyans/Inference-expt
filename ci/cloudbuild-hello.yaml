@@ -1,7 +1,8 @@
 # Build and deploy the Phase 0 smoke-test container.
 # Usage:
 #   gcloud builds submit --config=ci/cloudbuild-hello.yaml \
-#     --substitutions=_ENV=dev,SHORT_SHA=$(git rev-parse --short HEAD) .
+#     --substitutions=_ENV=dev,_SHA=$(git rev-parse --short HEAD) .
+# _SHA is optional (defaults to "manual"); _ENV is one of dev|staging|prod.
 
 substitutions:
   _ENV: "dev"                 # dev | staging | prod
@@ -9,6 +10,10 @@ substitutions:
   _REPO: "stylist-docker"
   _IMAGE_NAME: "stylist-hello"
   _SERVICE_PREFIX: "stylist"
+  # _SHA is required because SHORT_SHA is only populated for trigger-based
+  # builds. For manual `gcloud builds submit`, pass --substitutions=_SHA=$(git rev-parse --short HEAD).
+  # Defaults to "manual" if unset so builds never fail on empty version.
+  _SHA: "manual"
 
 options:
   logging: CLOUD_LOGGING_ONLY
@@ -22,18 +27,18 @@ steps:
     args:
       - build
       - -t
-      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-${SHORT_SHA}
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-${_SHA}
       - -t
       - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-latest
       - --label=app=stylist-agent
       - --label=env=${_ENV}
-      - --label=commit=${SHORT_SHA}
+      - --label=commit=${_SHA}
       - .
 
   # 2. Push both tags
   - id: push-sha
     name: gcr.io/cloud-builders/docker
-    args: [push, "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-${SHORT_SHA}"]
+    args: [push, "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-${_SHA}"]
   - id: push-latest
     name: gcr.io/cloud-builders/docker
     args: [push, "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-latest"]
@@ -49,10 +54,10 @@ steps:
         gcloud run deploy ${_SERVICE_PREFIX}-${_ENV}-hello \
           --project=${PROJECT_ID} \
           --region=${_REGION} \
-          --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-${SHORT_SHA} \
+          --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-${_SHA} \
           --service-account=agent-orch-${_ENV}-sa@${PROJECT_ID}.iam.gserviceaccount.com \
-          --labels=app=stylist-agent,env=${_ENV},commit=${SHORT_SHA} \
-          --set-env-vars=APP_ENV=${_ENV},APP_NAME=stylist-hello,VERSION=${SHORT_SHA} \
+          --labels=app=stylist-agent,env=${_ENV},commit=${_SHA} \
+          --set-env-vars=APP_ENV=${_ENV},APP_NAME=stylist-hello,VERSION=${_SHA} \
           --allow-unauthenticated \
           --quiet
 
@@ -65,7 +70,7 @@ steps:
       - |
         set -uo pipefail
         SERVICE="${_SERVICE_PREFIX}-${_ENV}-hello"
-        EXPECTED_IMAGE="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-${SHORT_SHA}"
+        EXPECTED_IMAGE="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-${_SHA}"
 
         echo "===== Service state ====="
         gcloud run services describe $$SERVICE --project=${PROJECT_ID} --region=${_REGION} \
@@ -81,7 +86,7 @@ steps:
         URL=$$(gcloud run services describe $$SERVICE --project=${PROJECT_ID} --region=${_REGION} \
           --format='value(status.url)')
         echo "===== Smoke test against $$URL ====="
-        echo "Expected version (SHORT_SHA): ${SHORT_SHA}"
+        echo "Expected version: ${_SHA}"
 
         # We validate via GET / because some Cloud Run frontends intercept
         # arbitrary health paths at the GFE layer (returning Google's HTML 404)
@@ -92,8 +97,8 @@ steps:
         for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
           ROOT_CODE=$$(curl -sS -o /tmp/root -w '%{http_code}' "$$URL/" || echo "000")
           echo "Attempt $$i: GET / -> $$ROOT_CODE"
-          if [ "$$ROOT_CODE" = "200" ] && grep -q "\"version\":\"${SHORT_SHA}\"" /tmp/root; then
-            echo "PASS: GET / returned 200 with version=${SHORT_SHA}"
+          if [ "$$ROOT_CODE" = "200" ] && grep -q "\"version\":\"${_SHA}\"" /tmp/root; then
+            echo "PASS: GET / returned 200 with version=${_SHA}"
             echo "Body: $$(cat /tmp/root)"
             exit 0
           fi
@@ -118,7 +123,7 @@ steps:
         exit 1
 
 images:
-  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-${SHORT_SHA}"
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-${_SHA}"
   - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-latest"
 
 timeout: 1200s

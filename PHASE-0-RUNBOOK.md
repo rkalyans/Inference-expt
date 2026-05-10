@@ -369,22 +369,26 @@ The entire build runs on Cloud Build servers — Cloud Shell only submits the jo
 ```bash
 cd ~/Inference-expt
 
+SHA=$(git rev-parse --short HEAD 2>/dev/null || echo manual)
+
 gcloud builds submit --config=ci/cloudbuild-hello.yaml \
-  --substitutions=_ENV=dev,SHORT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo manual) .
+  --substitutions=_ENV=dev,_SHA=$SHA .
 ```
 
 This will:
 1. Build `services/hello-world/Dockerfile` on Cloud Build
-2. Push two tags to Artifact Registry
+2. Push two tags to Artifact Registry (`:dev-<sha>` and `:dev-latest`)
 3. Deploy to Cloud Run as `stylist-dev-hello`
-4. Smoke-test `/healthz`
+4. Smoke-test `GET /` and assert the response body contains `"version":"<sha>"`, proving the just-built image is serving traffic
+
+> **Note:** We validate via `GET /` rather than `GET /healthz` because some Cloud Run frontends intercept arbitrary health paths at the GFE layer (returning Google's HTML 404) before the request reaches the container. The container's own `/healthz` liveness probe still runs internally and is enforced by Cloud Run's `Ready` condition.
 
 Watch the build live in Console: <https://console.cloud.google.com/cloud-build/builds?project=inference-expt>
 
 Repeat for staging and prod:
 ```bash
-gcloud builds submit --config=ci/cloudbuild-hello.yaml --substitutions=_ENV=staging .
-gcloud builds submit --config=ci/cloudbuild-hello.yaml --substitutions=_ENV=prod .
+gcloud builds submit --config=ci/cloudbuild-hello.yaml --substitutions=_ENV=staging,_SHA=$SHA .
+gcloud builds submit --config=ci/cloudbuild-hello.yaml --substitutions=_ENV=prod,_SHA=$SHA .
 ```
 
 ---
