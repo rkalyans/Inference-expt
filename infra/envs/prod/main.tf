@@ -96,6 +96,7 @@ module "hello_world" {
   allow_public  = true
   dns_subdomain = "app" # app.quantum-23.com
   domain        = var.domain
+  dns_zone_name = data.terraform_remote_state.shared.outputs.dns_zone_name
 
   labels = local.common_labels
 }

@@ -111,3 +111,19 @@ resource "google_cloud_run_domain_mapping" "domain" {
     route_name = google_cloud_run_v2_service.service.name
   }
 }
+
+# CNAME record inside the Cloud DNS zone so the subdomain actually resolves.
+# Cloud Run v1 subdomain mappings are always served via ghs.googlehosted.com;
+# this is the documented stable target and is why we don't read
+# google_cloud_run_domain_mapping.status.resource_records (empty on first plan).
+resource "google_dns_record_set" "subdomain_cname" {
+  count        = var.dns_subdomain != "" && var.dns_zone_name != "" ? 1 : 0
+  project      = var.project_id
+  managed_zone = var.dns_zone_name
+  name         = "${var.dns_subdomain}.${var.domain}."
+  type         = "CNAME"
+  ttl          = 300
+  rrdatas      = ["ghs.googlehosted.com."]
+
+  depends_on = [google_cloud_run_domain_mapping.domain]
+}

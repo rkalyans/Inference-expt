@@ -63,6 +63,12 @@ variable "domain" {
   default = "quantum-23.com"
 }
 
+variable "dns_zone_name" {
+  type        = string
+  default     = ""
+  description = "Cloud DNS managed-zone name (e.g. quantum-23-com). If set along with dns_subdomain, a CNAME <subdomain>.<domain> -> ghs.googlehosted.com is created so the domain mapping resolves publicly."
+}
+
 variable "labels" {
   type    = map(string)
   default = {}

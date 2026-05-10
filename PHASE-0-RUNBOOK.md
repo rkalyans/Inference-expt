@@ -398,15 +398,41 @@ gcloud builds submit --config=ci/cloudbuild-hello.yaml --substitutions=_ENV=prod
 All validation commands run in Cloud Shell.
 
 ### 9.1 Hit the public URLs
+
+Terraform (module `cloud-run-service`) creates both the Cloud Run domain mapping **and** the matching `CNAME <sub>.quantum-23.com → ghs.googlehosted.com` in the Cloud DNS zone. For this to actually resolve publicly, the registrar delegation from Step 5 must be in place — verify first:
+
 ```bash
-curl https://dev.quantum-23.com/healthz
-curl https://staging.quantum-23.com/healthz
-curl https://app.quantum-23.com/healthz
+dig +short NS quantum-23.com @8.8.8.8
+# Must return the 4 ns-cloud-cX.googledomains.com servers from `terraform output dns_name_servers`
+```
+
+If the NS check is good, the subdomains should resolve:
+
+```bash
+dig +short dev.quantum-23.com     @8.8.8.8   # -> ghs.googlehosted.com. + IP
+dig +short staging.quantum-23.com @8.8.8.8
+dig +short app.quantum-23.com     @8.8.8.8
+
+curl https://dev.quantum-23.com/
+curl https://staging.quantum-23.com/
+curl https://app.quantum-23.com/
 ```
 
 Or in the Console: <https://console.cloud.google.com/run?project=inference-expt> → click each service → **URL**.
 
-> **First request after deploy:** the Google-managed SSL cert may take 15–60 min to provision after the domain mapping is created. You'll get a TLS error until then. Plain `https://<service>-<hash>.run.app/healthz` works immediately.
+> **First request after deploy:** the Google-managed SSL cert takes 15–60 min to provision after the CNAME first resolves. You'll get a TLS error until then. Plain `https://<service>-<hash>.run.app/` works immediately.
+
+> **Upgrading an older clone:** If you applied an earlier version of Terraform that didn't create the CNAMEs, `git pull` then re-run `terraform apply` in each env stack — the new `google_dns_record_set.subdomain_cname` will be added.
+
+> **Manual override** (only if you need to create the records outside Terraform):
+> ```bash
+> ZONE=quantum-23-com; PROJECT=inference-expt
+> for sub in dev staging app; do
+>   gcloud dns record-sets create $sub.quantum-23.com. \
+>     --zone=$ZONE --project=$PROJECT --type=CNAME --ttl=300 \
+>     --rrdatas="ghs.googlehosted.com."
+> done
+> ```
 
 ### 9.2 Mandatory labels
 
