@@ -64,15 +64,15 @@ steps:
       - -c
       - |
         set -euo pipefail
-        URL="$(gcloud run services describe ${_SERVICE_PREFIX}-${_ENV}-hello \
+        URL="$$(gcloud run services describe ${_SERVICE_PREFIX}-${_ENV}-hello \
           --project=${PROJECT_ID} --region=${_REGION} --format='value(status.url)')"
-        echo "Service URL: $URL"
+        echo "Service URL: $$URL"
         for i in 1 2 3 4 5; do
-          if curl -fsS "$URL/healthz" | grep -q '"status":"ok"'; then
+          if curl -fsS "$$URL/healthz" | grep -q '"status":"ok"'; then
             echo "PASS: /healthz returned ok"
             exit 0
           fi
-          echo "Retry $i in 5s..."
+          echo "Retry $$i in 5s..."
           sleep 5
         done
         echo "FAIL: smoke test did not pass"
