@@ -63,19 +63,37 @@ steps:
     args:
       - -c
       - |
-        set -euo pipefail
-        URL="$$(gcloud run services describe ${_SERVICE_PREFIX}-${_ENV}-hello \
+        set -uo pipefail
+        SERVICE="${_SERVICE_PREFIX}-${_ENV}-hello"
+        URL="$$(gcloud run services describe $$SERVICE \
           --project=${PROJECT_ID} --region=${_REGION} --format='value(status.url)')"
-        echo "Service URL: $$URL"
-        for i in 1 2 3 4 5; do
-          if curl -fsS "$$URL/healthz" | grep -q '"status":"ok"'; then
-            echo "PASS: /healthz returned ok"
-            exit 0
+        echo "Service: $$SERVICE"
+        echo "URL    : $$URL"
+
+        for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+          BODY=$$(curl -sS -o /tmp/body -w '%{http_code}' "$$URL/healthz" || echo "000")
+          echo "Attempt $$i: HTTP $$BODY"
+          if [ "$$BODY" = "200" ]; then
+            echo "Body: $$(cat /tmp/body)"
+            if grep -qE '"status"[[:space:]]*:[[:space:]]*"ok"' /tmp/body; then
+              echo "PASS: /healthz returned status=ok"
+              exit 0
+            fi
+            echo "WARN: HTTP 200 but body did not include status=ok"
           fi
-          echo "Retry $$i in 5s..."
           sleep 5
         done
-        echo "FAIL: smoke test did not pass"
+
+        echo "FAIL: smoke test did not pass after 12 attempts"
+        echo "----- last response body -----"
+        cat /tmp/body 2>/dev/null || echo "(no body)"
+        echo "----- service describe -----"
+        gcloud run services describe $$SERVICE --project=${PROJECT_ID} --region=${_REGION} \
+          --format='value(status.conditions,status.latestReadyRevisionName,status.url)'
+        echo "----- last 50 log lines -----"
+        gcloud logging read \
+          "resource.type=cloud_run_revision AND resource.labels.service_name=$$SERVICE" \
+          --project=${PROJECT_ID} --limit=50 --format='value(textPayload,jsonPayload.message)' || true
         exit 1
 
 images:
