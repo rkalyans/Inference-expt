@@ -14,6 +14,7 @@ variable "domain" {
 }
 
 variable "hello_image" {
-  type    = string
-  default = "us-east4-docker.pkg.dev/inference-expt/stylist-docker/stylist-hello:latest"
+  type        = string
+  description = "Placeholder image; Cloud Build deploys the real one as a new revision."
+  default     = "us-docker.pkg.dev/cloudrun/container/hello"
 }

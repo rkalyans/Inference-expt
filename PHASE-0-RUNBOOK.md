@@ -358,6 +358,8 @@ terraform init && terraform apply
 
 Each stack creates: per-env IAM SAs, env-scoped GCS buckets, resource-level IAM bindings, and the hello-world Cloud Run service mapped to its subdomain (`dev.quantum-23.com`, `staging.quantum-23.com`, `app.quantum-23.com`).
 
+> **Placeholder image:** Terraform creates the Cloud Run service with Google's public hello image (`us-docker.pkg.dev/cloudrun/container/hello`). Cloud Build (Step 8) then deploys the real image as a new revision. The `cloud-run-service` module has `lifecycle.ignore_changes = [template[0].containers[0].image]` so re-running `terraform apply` after Step 8 will **not** revert the deployed image.
+
 ---
 
 ## 8. Build & Deploy Hello-World via Cloud Build
@@ -538,6 +540,7 @@ All fixes assume Cloud Shell.
 | Domain mapping stuck `PENDING` | DNS NS records not yet at registrar | Wait, re-run `dig +short NS quantum-23.com` |
 | TLS error on `dev.quantum-23.com` | Managed cert still provisioning | Wait 15–60 min after first successful DNS resolution |
 | Cloud Build `denied: Permission` to push | `cloudbuild-sa` missing AR Writer | Re-apply `shared` stack; check IAM bindings |
+| `terraform apply` per-env fails with `Image '...stylist-hello:latest' not found` | You cloned an older copy that hard-coded the AR image as the Terraform default. The current default is `us-docker.pkg.dev/cloudrun/container/hello` (public placeholder); Cloud Build deploys the real one in Step 8. | `git pull`, then re-run `terraform apply` |
 | IAM impersonation test (§9.3) succeeds when it should fail | dev SA may genuinely not exist yet | Confirm dev stack applied: `cd infra/envs/dev && terraform output` |
 | OpenWeatherMap key returns 401 | One Call API 3.0 not on subscription | Upgrade subscription tier on openweathermap.org |
 | Langfuse `/api/public/projects` returns 401 | Wrong public/secret key pair, or wrong host (US vs EU) | Re-copy the keys; confirm host matches the Langfuse Cloud region |

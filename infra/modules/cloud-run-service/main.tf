@@ -78,6 +78,9 @@ resource "google_cloud_run_v2_service" "service" {
     ignore_changes = [
       client,
       client_version,
+      # Cloud Build deploys the real image as a new revision after Terraform
+      # creates the service. Don't revert that on subsequent `terraform apply`.
+      template[0].containers[0].image,
     ]
   }
 }

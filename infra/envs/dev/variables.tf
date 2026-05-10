@@ -15,6 +15,12 @@ variable "domain" {
 
 variable "hello_image" {
   type        = string
-  description = "Full Artifact Registry image URI for the hello-world container"
-  default     = "us-east4-docker.pkg.dev/inference-expt/stylist-docker/stylist-hello:latest"
+  description = <<-EOT
+    Container image for the hello-world Cloud Run service.
+    Default is Google's public hello image so Terraform can create the service
+    before Cloud Build builds the real one. After Cloud Build deploys a real
+    revision, the service module ignores image changes (see
+    modules/cloud-run-service/main.tf lifecycle block).
+  EOT
+  default     = "us-docker.pkg.dev/cloudrun/container/hello"
 }
