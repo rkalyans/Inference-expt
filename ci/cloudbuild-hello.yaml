@@ -65,35 +65,50 @@ steps:
       - |
         set -uo pipefail
         SERVICE="${_SERVICE_PREFIX}-${_ENV}-hello"
-        URL="$$(gcloud run services describe $$SERVICE \
-          --project=${PROJECT_ID} --region=${_REGION} --format='value(status.url)')"
-        echo "Service: $$SERVICE"
-        echo "URL    : $$URL"
+        EXPECTED_IMAGE="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-${SHORT_SHA}"
+
+        echo "===== Service state ====="
+        gcloud run services describe $$SERVICE --project=${PROJECT_ID} --region=${_REGION} \
+          --format='yaml(status.latestReadyRevisionName,status.traffic,status.urls)'
+
+        echo "===== Latest revision image ====="
+        REV=$$(gcloud run services describe $$SERVICE --project=${PROJECT_ID} --region=${_REGION} \
+          --format='value(status.latestReadyRevisionName)')
+        echo "Latest ready revision: $$REV"
+        gcloud run revisions describe $$REV --project=${PROJECT_ID} --region=${_REGION} \
+          --format='value(spec.containers[0].image)' || true
+
+        URL=$$(gcloud run services describe $$SERVICE --project=${PROJECT_ID} --region=${_REGION} \
+          --format='value(status.url)')
+        echo "===== Smoke test against $$URL ====="
 
         for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
-          BODY=$$(curl -sS -o /tmp/body -w '%{http_code}' "$$URL/healthz" || echo "000")
-          echo "Attempt $$i: HTTP $$BODY"
-          if [ "$$BODY" = "200" ]; then
-            echo "Body: $$(cat /tmp/body)"
-            if grep -qE '"status"[[:space:]]*:[[:space:]]*"ok"' /tmp/body; then
-              echo "PASS: /healthz returned status=ok"
-              exit 0
-            fi
-            echo "WARN: HTTP 200 but body did not include status=ok"
+          ROOT_CODE=$$(curl -sS -o /tmp/root -w '%{http_code}' "$$URL/" || echo "000")
+          HZ_CODE=$$(curl -sS -o /tmp/hz   -w '%{http_code}' "$$URL/healthz" || echo "000")
+          echo "Attempt $$i: GET / -> $$ROOT_CODE | GET /healthz -> $$HZ_CODE"
+          if [ "$$HZ_CODE" = "200" ] && grep -qE '"status"[[:space:]]*:[[:space:]]*"ok"' /tmp/hz; then
+            echo "PASS: /healthz returned status=ok"
+            echo "Body: $$(cat /tmp/hz)"
+            exit 0
           fi
           sleep 5
         done
 
-        echo "FAIL: smoke test did not pass after 12 attempts"
-        echo "----- last response body -----"
-        cat /tmp/body 2>/dev/null || echo "(no body)"
-        echo "----- service describe -----"
+        echo "===== FAIL after 12 attempts ====="
+        echo "----- last GET / body -----"
+        cat /tmp/root 2>/dev/null || echo "(no body)"
+        echo
+        echo "----- last GET /healthz body -----"
+        cat /tmp/hz 2>/dev/null || echo "(no body)"
+        echo
+        echo "----- service conditions -----"
         gcloud run services describe $$SERVICE --project=${PROJECT_ID} --region=${_REGION} \
-          --format='value(status.conditions,status.latestReadyRevisionName,status.url)'
-        echo "----- last 50 log lines -----"
+          --format='value(status.conditions)'
+        echo "----- last 50 log lines for $$SERVICE -----"
         gcloud logging read \
           "resource.type=cloud_run_revision AND resource.labels.service_name=$$SERVICE" \
-          --project=${PROJECT_ID} --limit=50 --format='value(textPayload,jsonPayload.message)' || true
+          --project=${PROJECT_ID} --limit=50 \
+          --format='value(timestamp,textPayload,jsonPayload.message)' || true
         exit 1
 
 images:
