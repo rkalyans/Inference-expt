@@ -83,7 +83,9 @@ resource "google_sql_user" "root" {
 resource "google_secret_manager_secret" "root_password" {
   project   = var.project_id
   secret_id = "stylist-${var.env}-pg-root-password"
-  replication { auto {} }
+  replication {
+    auto {}
+  }
   labels = var.labels
 }
 

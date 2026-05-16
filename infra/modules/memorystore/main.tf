@@ -33,7 +33,9 @@ resource "google_redis_instance" "cache" {
 resource "google_secret_manager_secret" "redis_auth" {
   project   = var.project_id
   secret_id = "stylist-${var.env}-redis-auth"
-  replication { auto {} }
+  replication {
+    auto {}
+  }
   labels = var.labels
 }
 
