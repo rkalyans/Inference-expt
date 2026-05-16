@@ -12,10 +12,29 @@ resource "google_cloud_run_v2_service" "service" {
 
   template {
     service_account = var.service_account_email
+    timeout         = var.timeout
 
     scaling {
       min_instance_count = var.min_instances
       max_instance_count = var.max_instances
+    }
+
+    dynamic "vpc_access" {
+      for_each = var.vpc_connector_id == "" ? [] : [1]
+      content {
+        connector = var.vpc_connector_id
+        egress    = var.vpc_egress
+      }
+    }
+
+    dynamic "volumes" {
+      for_each = var.cloudsql_connection_name == "" ? [] : [1]
+      content {
+        name = "cloudsql"
+        cloud_sql_instance {
+          instances = [var.cloudsql_connection_name]
+        }
+      }
     }
 
     containers {
@@ -46,6 +65,14 @@ resource "google_cloud_run_v2_service" "service" {
               version = "latest"
             }
           }
+        }
+      }
+
+      dynamic "volume_mounts" {
+        for_each = var.cloudsql_connection_name == "" ? [] : [1]
+        content {
+          name       = "cloudsql"
+          mount_path = "/cloudsql"
         }
       }
 

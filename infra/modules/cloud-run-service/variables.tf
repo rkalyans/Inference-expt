@@ -73,3 +73,25 @@ variable "labels" {
   type    = map(string)
   default = {}
 }
+
+variable "vpc_connector_id" {
+  type        = string
+  default     = ""
+  description = "Optional Serverless VPC Access connector for private connectivity"
+}
+
+variable "vpc_egress" {
+  type    = string
+  default = "PRIVATE_RANGES_ONLY"
+}
+
+variable "cloudsql_connection_name" {
+  type        = string
+  default     = ""
+  description = "Optional Cloud SQL connection name to mount via /cloudsql/<conn>"
+}
+
+variable "timeout" {
+  type    = string
+  default = "60s"
+}

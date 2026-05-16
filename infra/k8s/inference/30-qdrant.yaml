@@ -1,0 +1,102 @@
+---
+# Qdrant runs on the CPU pool with persistent disk so vectors survive pod
+# restarts. One replica is sufficient for Phase 1 (single env, low QPS); a
+# StatefulSet keeps the volume binding stable across rescheduling.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: qdrant
+  namespace: inference
+  labels:
+    app: qdrant
+    component: vector-db
+spec:
+  serviceName: qdrant-headless
+  replicas: 1
+  selector:
+    matchLabels: { app: qdrant }
+  template:
+    metadata:
+      labels:
+        app: qdrant
+        component: vector-db
+    spec:
+      serviceAccountName: qdrant
+      # Stay on CPU pool — no GPU tolerations.
+      nodeSelector:
+        cloud.google.com/gke-nodepool: cpu-pool
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: qdrant
+          image: qdrant/qdrant:v1.12.4
+          ports:
+            - { name: http, containerPort: 6333 }
+            - { name: grpc, containerPort: 6334 }
+          env:
+            - name: QDRANT__SERVICE__HTTP_PORT
+              value: "6333"
+            - name: QDRANT__SERVICE__GRPC_PORT
+              value: "6334"
+            - name: QDRANT__STORAGE__STORAGE_PATH
+              value: /qdrant/storage
+            # API key (optional but recommended). Mounted from K8s Secret.
+            - name: QDRANT__SERVICE__API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: qdrant-auth
+                  key: api-key
+                  optional: true
+          resources:
+            requests: { cpu: "500m", memory: "1Gi" }
+            limits:   { cpu: "2",    memory: "4Gi" }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /livez, port: http }
+            periodSeconds: 30
+          volumeMounts:
+            - name: storage
+              mountPath: /qdrant/storage
+  volumeClaimTemplates:
+    - metadata:
+        name: storage
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: standard-rwo
+        resources:
+          requests:
+            storage: 20Gi
+---
+# Headless service: lets the StatefulSet members address each other in a
+# future multi-replica setup. Not used by clients in Phase 1.
+apiVersion: v1
+kind: Service
+metadata:
+  name: qdrant-headless
+  namespace: inference
+spec:
+  clusterIP: None
+  selector:
+    app: qdrant
+  ports:
+    - { name: http, port: 6333, targetPort: http }
+    - { name: grpc, port: 6334, targetPort: grpc }
+---
+# ILB the agent + inventory services hit from Cloud Run via the VPC connector.
+apiVersion: v1
+kind: Service
+metadata:
+  name: qdrant
+  namespace: inference
+  annotations:
+    networking.gke.io/load-balancer-type: "Internal"
+    cloud.google.com/l4-rbs: "enabled"
+spec:
+  type: LoadBalancer
+  selector:
+    app: qdrant
+  ports:
+    - { name: http, port: 6333, targetPort: http, protocol: TCP }
+    - { name: grpc, port: 6334, targetPort: grpc, protocol: TCP }

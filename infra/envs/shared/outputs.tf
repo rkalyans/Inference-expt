@@ -2,6 +2,16 @@ output "vpc_self_link" {
   value = module.network.vpc_self_link
 }
 
+output "psa_connection" {
+  description = "PSA connection — env stacks depend on this before creating Cloud SQL/Memorystore"
+  value       = module.network.psa_connection
+}
+
+output "vpc_connector_id" {
+  description = "Serverless VPC Access connector — pass to Cloud Run for private connectivity"
+  value       = module.network.vpc_connector_id
+}
+
 output "subnets" {
   value = module.network.subnets
 }

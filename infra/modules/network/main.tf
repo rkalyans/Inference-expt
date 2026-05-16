@@ -96,3 +96,100 @@ resource "google_compute_firewall" "allow_iap_ssh" {
   source_ranges = ["35.235.240.0/20"] # Google IAP range
   target_tags   = ["allow-iap-ssh"]
 }
+
+# ----- Private Services Access (PSA) -----
+# Reserved IP range that Google-managed services (Cloud SQL, Memorystore, etc.)
+# allocate from when given a private IP. Single PSA range shared by all envs.
+resource "google_compute_global_address" "psa_range" {
+  name          = "stylist-psa-range"
+  project       = var.project_id
+  purpose       = "VPC_PEERING"
+  address_type  = "INTERNAL"
+  prefix_length = 16
+  network       = google_compute_network.vpc.id
+  description   = "Reserved range for private services (Cloud SQL, Memorystore)"
+}
+
+resource "google_service_networking_connection" "psa" {
+  network                 = google_compute_network.vpc.id
+  service                 = "servicenetworking.googleapis.com"
+  reserved_peering_ranges = [google_compute_global_address.psa_range.name]
+}
+
+# Allow Cloud Run / GKE to reach private services via the PSA range
+resource "google_compute_firewall" "allow_internal_to_psa" {
+  name      = "stylist-allow-internal-to-psa"
+  project   = var.project_id
+  network   = google_compute_network.vpc.id
+  priority  = 1000
+  direction = "EGRESS"
+
+  allow { protocol = "tcp" }
+  destination_ranges = ["10.0.0.0/8"] # covers PSA + subnets
+}
+
+# ----- GKE-bound firewall rules (Phase 1.2) -----
+# Cloud Run (via the serverless VPC connector) -> GKE pods on inference ports.
+# Targets the per-env pod CIDR; covers vLLM (8000), Triton (8001/8002), Qdrant (6333).
+resource "google_compute_firewall" "allow_connector_to_gke" {
+  name      = "stylist-allow-connector-to-gke"
+  project   = var.project_id
+  network   = google_compute_network.vpc.id
+  priority  = 1000
+  direction = "INGRESS"
+
+  allow {
+    protocol = "tcp"
+    ports    = ["8000", "8001", "8002", "6333", "6334"]
+  }
+
+  source_ranges = [var.vpc_connector_cidr]
+  target_tags   = ["stylist-gke-node"]
+}
+
+# Allow GKE health checks (Google's load balancer probers) to reach node ports.
+resource "google_compute_firewall" "allow_gke_health_checks" {
+  name      = "stylist-allow-gke-health-checks"
+  project   = var.project_id
+  network   = google_compute_network.vpc.id
+  priority  = 1000
+  direction = "INGRESS"
+
+  allow {
+    protocol = "tcp"
+  }
+
+  # Google health-check + ILB prober ranges
+  source_ranges = ["35.191.0.0/16", "130.211.0.0/22", "209.85.152.0/22", "209.85.204.0/22"]
+  target_tags   = ["stylist-gke-node"]
+}
+
+# Allow node-to-node + node-to-pod traffic (kubelet, kube-proxy, CNI).
+resource "google_compute_firewall" "allow_gke_intra" {
+  name      = "stylist-allow-gke-intra"
+  project   = var.project_id
+  network   = google_compute_network.vpc.id
+  priority  = 1000
+  direction = "INGRESS"
+
+  allow { protocol = "tcp" }
+  allow { protocol = "udp" }
+  allow { protocol = "icmp" }
+
+  source_tags = ["stylist-gke-node"]
+  target_tags = ["stylist-gke-node"]
+}
+
+# ----- Serverless VPC Access Connector -----
+# Lets Cloud Run services / Cloud Run Jobs reach private resources (Cloud SQL,
+# Memorystore, internal-LB-fronted GKE Services).
+resource "google_vpc_access_connector" "serverless" {
+  name          = "stylist-vpc-conn"
+  project       = var.project_id
+  region        = var.region
+  network       = google_compute_network.vpc.name
+  ip_cidr_range = var.vpc_connector_cidr
+  min_instances = 2
+  max_instances = 3
+  machine_type  = "e2-micro"
+}

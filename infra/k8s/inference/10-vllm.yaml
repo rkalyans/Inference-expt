@@ -1,0 +1,144 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm
+  namespace: inference
+  labels:
+    app: vllm
+    component: llm
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: vllm }
+  strategy:
+    type: Recreate # only one GPU per node; rolling update would deadlock on GPU
+  template:
+    metadata:
+      labels:
+        app: vllm
+        component: llm
+    spec:
+      serviceAccountName: vllm
+      # Pin to GPU pool + tolerate the gpu taint.
+      nodeSelector:
+        cloud.google.com/gke-accelerator: nvidia-l4
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Equal
+          value: present
+          effect: NoSchedule
+      # Drop privileges; vLLM does not need root.
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:v0.6.3
+          imagePullPolicy: IfNotPresent
+          args:
+            - --model=$(MODEL)
+            - --port=8000
+            - --gpu-memory-utilization=0.90
+            - --max-model-len=8192
+            - --download-dir=/models
+            - --enable-prefix-caching
+            - --disable-log-requests
+          env:
+            - name: MODEL
+              value: mistralai/Mistral-7B-Instruct-v0.3
+            - name: HF_HOME
+              value: /models
+            # Hugging Face token (Mistral is gated). Stored in K8s Secret;
+            # see runbook §1.2 step "Hugging Face token".
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: huggingface
+                  key: token
+                  optional: false
+          ports:
+            - name: http
+              containerPort: 8000
+          resources:
+            requests:
+              cpu: "2"
+              memory: 16Gi
+              nvidia.com/gpu: "1"
+              ephemeral-storage: 30Gi
+            limits:
+              cpu: "8"
+              memory: 24Gi
+              nvidia.com/gpu: "1"
+              ephemeral-storage: 60Gi
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 60 # 10 min for first download (Mistral-7B ~14GB)
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 30
+            failureThreshold: 3
+          volumeMounts:
+            - name: models
+              mountPath: /models
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: models
+          emptyDir:
+            sizeLimit: 60Gi
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 4Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm
+  namespace: inference
+  labels:
+    app: vllm
+  annotations:
+    networking.gke.io/load-balancer-type: "Internal"
+    cloud.google.com/l4-rbs: "enabled"
+spec:
+  type: LoadBalancer
+  selector:
+    app: vllm
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+      protocol: TCP
+---
+# HPA based on incoming requests. With one L4 we bottleneck on GPU memory long
+# before CPU; this scales the deployment count which only matters once we add
+# more GPU nodes (gpu_max_nodes > 1).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: vllm
+  namespace: inference
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vllm
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

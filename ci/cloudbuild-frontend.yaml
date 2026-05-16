@@ -1,0 +1,120 @@
+# Cloud Build pipeline for the Next.js frontend.
+#
+# Frontend differs from other services because `NEXT_PUBLIC_AGENT_URL` is
+# baked into the client JS at build time. We pass it as `--build-arg` so the
+# resulting image is per-env immutable. Re-deploying staging from a dev
+# image won't accidentally point users at the dev agent.
+#
+# Substitutions:
+#   _ENV         dev | staging | prod                            (required)
+#   _SHA         git sha or build id                              (default $BUILD_ID)
+#
+# Usage:
+#   gcloud builds submit \
+#     --config=ci/cloudbuild-frontend.yaml \
+#     --substitutions=_ENV=dev,_SHA=$(git rev-parse --short HEAD) .
+
+substitutions:
+  _ENV: ""
+  _SHA: "${BUILD_ID}"
+  # Firebase web client config (per-env, set via trigger or --substitutions).
+  # These are NOT secrets — they're public client identifiers.
+  _FB_API_KEY: ""
+  _FB_AUTH_DOMAIN: ""
+  _FB_PROJECT_ID: ""
+  _FB_APP_ID: ""
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8 # Next.js build is CPU bound
+
+images:
+  - >-
+    us-east4-docker.pkg.dev/$PROJECT_ID/stylist-${_ENV}/frontend:${_SHA}
+
+steps:
+  # 1. Pre-flight: assert _ENV
+  - id: assert-env
+    name: gcr.io/cloud-builders/gcloud
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        if [[ -z "${_ENV}" || ! "${_ENV}" =~ ^(dev|staging|prod)$ ]]; then
+          echo "ERROR: _ENV must be one of dev|staging|prod (got '${_ENV}')"
+          exit 1
+        fi
+        echo "Building frontend for env=${_ENV} sha=${_SHA}"
+
+  # 2. Compute the agent URL for this env
+  - id: compute-agent-url
+    name: gcr.io/cloud-builders/gcloud
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        case "${_ENV}" in
+          prod)              URL="https://api.quantum-23.com" ;;
+          dev|staging)       URL="https://api-${_ENV}.quantum-23.com" ;;
+        esac
+        echo "$URL" > /workspace/agent_url
+        echo "NEXT_PUBLIC_AGENT_URL=$URL"
+
+  # 3. Build with the per-env public agent URL baked in
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        AGENT_URL=$(cat /workspace/agent_url)
+        IMAGE=us-east4-docker.pkg.dev/$PROJECT_ID/stylist-${_ENV}/frontend:${_SHA}
+        docker build \
+          --build-arg NEXT_PUBLIC_AGENT_URL="$AGENT_URL" \
+          --build-arg NEXT_PUBLIC_FIREBASE_API_KEY="${_FB_API_KEY}" \
+          --build-arg NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN="${_FB_AUTH_DOMAIN}" \
+          --build-arg NEXT_PUBLIC_FIREBASE_PROJECT_ID="${_FB_PROJECT_ID}" \
+          --build-arg NEXT_PUBLIC_FIREBASE_APP_ID="${_FB_APP_ID}" \
+          -t "$IMAGE" \
+          services/frontend
+
+  # 4. Push
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args:
+      ["push", "us-east4-docker.pkg.dev/$PROJECT_ID/stylist-${_ENV}/frontend:${_SHA}"]
+
+  # 5. Deploy to Cloud Run
+  - id: deploy
+    name: gcr.io/cloud-builders/gcloud
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        gcloud run services update stylist-${_ENV}-frontend \
+          --region=us-east4 \
+          --image=us-east4-docker.pkg.dev/$PROJECT_ID/stylist-${_ENV}/frontend:${_SHA} \
+          --quiet
+
+  # 6. Smoke test (the public Cloud Run URL; DNS may not have propagated yet)
+  - id: smoke
+    name: gcr.io/cloud-builders/gcloud
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        URL=$(gcloud run services describe stylist-${_ENV}-frontend \
+                --region=us-east4 --format='value(status.url)')
+        echo "Probing $URL"
+        for i in 1 2 3 4 5; do
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$URL/" || true)
+          if [[ "$code" == "200" ]]; then echo "OK"; exit 0; fi
+          echo "attempt $i: HTTP $code; retrying..."
+          sleep 5
+        done
+        echo "frontend did not return 200"; exit 1

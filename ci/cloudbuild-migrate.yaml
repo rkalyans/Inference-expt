@@ -1,0 +1,78 @@
+# Build the db-migrate image, push it, deploy a new revision of the
+# stylist-${_ENV}-db-migrate Cloud Run Job, then execute it once.
+#
+# Usage:
+#   gcloud builds submit --config=ci/cloudbuild-migrate.yaml \
+#     --substitutions=_ENV=dev,_SHA=$(git rev-parse --short HEAD) .
+
+substitutions:
+  _ENV: "dev"           # dev | staging | prod
+  _REGION: "us-east4"
+  _REPO: "stylist-docker"
+  _IMAGE_NAME: "db-migrate"
+  _SHA: "manual"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - services/db-migrate/Dockerfile
+      - -t
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-${_SHA}
+      - -t
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-latest
+      - --label=app=stylist-agent
+      - --label=env=${_ENV}
+      - --label=commit=${_SHA}
+      - .
+
+  - id: push-sha
+    name: gcr.io/cloud-builders/docker
+    args: [push, "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-${_SHA}"]
+  - id: push-latest
+    name: gcr.io/cloud-builders/docker
+    args: [push, "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-latest"]
+
+  - id: deploy-job
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        IMAGE="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-${_SHA}"
+        gcloud run jobs update stylist-${_ENV}-db-migrate \
+          --project=${PROJECT_ID} --region=${_REGION} \
+          --image="$$IMAGE" --quiet
+
+  - id: execute-job
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        echo "===== Executing migration job ====="
+        gcloud run jobs execute stylist-${_ENV}-db-migrate \
+          --project=${PROJECT_ID} --region=${_REGION} \
+          --wait --quiet
+
+        echo "===== Last execution status ====="
+        EXEC=$$(gcloud run jobs executions list --job=stylist-${_ENV}-db-migrate \
+          --region=${_REGION} --project=${PROJECT_ID} \
+          --limit=1 --format='value(name)')
+        gcloud run jobs executions describe "$$EXEC" \
+          --region=${_REGION} --project=${PROJECT_ID} \
+          --format='value(status.conditions)'
+
+images:
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-${_SHA}"
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_ENV}-latest"
+
+timeout: 1800s

@@ -38,6 +38,8 @@ resource "google_project_iam_member" "cloudbuild_roles" {
     "roles/storage.admin",
     "roles/secretmanager.secretAccessor",
     "roles/logging.logWriter",
+    "roles/cloudsql.client",      # for cloudbuild-migrate.yaml
+    "roles/cloudsql.instanceUser",
   ]) : []
 
   project = var.project_id

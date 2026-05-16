@@ -497,17 +497,36 @@ gcloud storage buckets get-iam-policy gs://stylist-prod-clothing-photos \
 
 Cloud Shell:
 ```bash
-# Recent logs from any stylist service
-gcloud logging read 'labels.app="stylist-agent"' --limit=10 --format=json | \
-  jq -r '.[].textPayload // .[].jsonPayload.message'
+# Recent logs from any stylist Cloud Run service.
+# Filter on resource.labels.service_name — service-metadata labels (app=stylist-agent)
+# do NOT propagate to log entries, so `labels.app="..."` matches nothing.
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name=~"^stylist-"' \
+  --project=inference-expt --limit=10 --format=json \
+  | jq -r '.[] | (.timestamp + " " + (.textPayload // .jsonPayload.message // ""))'
+```
 
-# Confirm the BigQuery sink is receiving rows (errors only)
-bq query --use_legacy_sql=false \
-  'SELECT COUNT(*) FROM `inference-expt.ops_analytics.stderr_*`'
+Verify the BigQuery error sink is wired correctly. The sink only writes `severity>=ERROR` entries, so the `stderr_*` partitioned tables are created **lazily on first insert** — until something errors, the dataset exists but contains zero tables. That's expected.
+
+```bash
+# Wiring checks (these should all succeed even with zero errors yet)
+bq ls --project_id=inference-expt | grep ops_analytics
+gcloud logging sinks describe stylist-errors-to-bq --project=inference-expt \
+  --format='value(destination,filter)'
+
+# Force one synthetic ERROR to prove the end-to-end sink path:
+gcloud logging write stylist-test-error \
+  '{"message":"phase-0 sink smoke-test","service":"stylist-hello"}' \
+  --severity=ERROR --payload-type=json --project=inference-expt
+
+# Wait ~60s, then confirm BigQuery received it:
+bq query --use_legacy_sql=false --project_id=inference-expt \
+  'SELECT table_name FROM `inference-expt.ops_analytics.INFORMATION_SCHEMA.TABLES`'
+# Should list: stderr_<today>
 ```
 
 Or Console:
-- Logs: <https://console.cloud.google.com/logs/query;query=labels.app%3D%22stylist-agent%22?project=inference-expt>
+- Logs: <https://console.cloud.google.com/logs/query;query=resource.type%3D%22cloud_run_revision%22%20AND%20resource.labels.service_name%3D~%22%5Estylist-%22?project=inference-expt>
 - Metrics: <https://console.cloud.google.com/monitoring/dashboards?project=inference-expt>
 
 ### 9.5 Budget alerts
@@ -527,9 +546,15 @@ Or Console: <https://console.cloud.google.com/billing/budgets>
 Verifies the data-scope guardrail works. Cloud Shell:
 
 ```bash
-# Confirm DLP API is enabled and reachable from this project
-gcloud services list --enabled --filter="NAME:dlp.googleapis.com"
-gcloud dlp jobs list --location=$REGION --project=$PROJECT_ID --limit=1
+# 1. Confirm DLP API is enabled
+gcloud services list --enabled --project=$PROJECT_ID --filter="NAME:dlp.googleapis.com"
+# Expect one row: dlp.googleapis.com  Cloud Data Loss Prevention (DLP) API
+
+# 2. Confirm the API responds (gcloud dlp is alpha-only, so use REST)
+curl -s -o /dev/null -w "DLP API HTTP %{http_code}\n" \
+  -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+  "https://dlp.googleapis.com/v2/projects/$PROJECT_ID/locations/$REGION/infoTypes"
+# Expect: DLP API HTTP 200
 ```
 
 Or Console: <https://console.cloud.google.com/security/sensitive-data-protection/landing?project=inference-expt>

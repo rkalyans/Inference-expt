@@ -41,3 +41,4 @@ credentials.json
 # Logs
 logs/
 *.log
+infra/envs/*/inference.auto.tfvars

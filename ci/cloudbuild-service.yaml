@@ -1,0 +1,110 @@
+# Generic build+deploy pipeline for any FastAPI service under services/<_SERVICE>.
+# Usage:
+#   gcloud builds submit --config=ci/cloudbuild-service.yaml \
+#     --substitutions=_SERVICE=weather-api,_ENV=dev,_SHA=$(git rev-parse --short HEAD) .
+#
+# Conventions:
+#   services/<_SERVICE>/Dockerfile must exist
+#   Cloud Run service name is  stylist-<_ENV>-<_SHORT_NAME>  (e.g. stylist-dev-weather)
+#   Artifact Registry image is <region>/.../<_SERVICE>:<_ENV>-<_SHA>
+
+substitutions:
+  _SERVICE: ""                 # weather-api | inventory-api | agent-orchestrator
+  _ENV: "dev"                  # dev | staging | prod
+  _REGION: "us-east4"
+  _REPO: "stylist-docker"
+  _SHORT_NAME: ""              # weather | inventory | agent (Cloud Run suffix)
+  _SHA: "manual"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+
+steps:
+  - id: validate
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        if [ -z "${_SERVICE}" ] || [ -z "${_SHORT_NAME}" ]; then
+          echo "FATAL: _SERVICE and _SHORT_NAME substitutions required" >&2
+          exit 2
+        fi
+        test -f services/${_SERVICE}/Dockerfile || { echo "missing services/${_SERVICE}/Dockerfile"; exit 2; }
+
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    dir: services/${_SERVICE}
+    args:
+      - build
+      - -t
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${_ENV}-${_SHA}
+      - -t
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${_ENV}-latest
+      - --label=app=stylist-agent
+      - --label=service=${_SERVICE}
+      - --label=env=${_ENV}
+      - --label=commit=${_SHA}
+      - .
+
+  - id: push-sha
+    name: gcr.io/cloud-builders/docker
+    args: [push, "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${_ENV}-${_SHA}"]
+  - id: push-latest
+    name: gcr.io/cloud-builders/docker
+    args: [push, "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${_ENV}-latest"]
+
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        SERVICE=stylist-${_ENV}-${_SHORT_NAME}
+        IMAGE=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${_ENV}-${_SHA}
+        echo "===== Deploying $$SERVICE <- $$IMAGE ====="
+        gcloud run services update $$SERVICE \
+          --project=${PROJECT_ID} --region=${_REGION} \
+          --image=$$IMAGE \
+          --labels=app=stylist-agent,service=${_SERVICE},env=${_ENV},commit=${_SHA} \
+          --update-env-vars=VERSION=${_SHA} \
+          --quiet
+
+  - id: smoke-test
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -uo pipefail
+        SERVICE=stylist-${_ENV}-${_SHORT_NAME}
+        URL=$$(gcloud run services describe $$SERVICE \
+          --project=${PROJECT_ID} --region=${_REGION} \
+          --format='value(status.url)')
+        echo "===== Health probe $$URL/healthz ====="
+        # All three services are private (no allUsers binding). Use an ID
+        # token minted for Cloud Build's own SA — it has roles/run.invoker
+        # (granted via roles/run.admin).
+        TOKEN=$$(gcloud auth print-identity-token --audiences=$$URL)
+        for i in 1 2 3 4 5 6 7 8; do
+          CODE=$$(curl -sS -H "Authorization: Bearer $$TOKEN" \
+            -o /tmp/h -w '%{http_code}' "$$URL/healthz" || echo "000")
+          echo "Attempt $$i: $$CODE  body=$$(cat /tmp/h 2>/dev/null)"
+          if [ "$$CODE" = "200" ]; then exit 0; fi
+          sleep 5
+        done
+        echo "===== FAIL ====="
+        gcloud logging read \
+          "resource.type=cloud_run_revision AND resource.labels.service_name=$$SERVICE" \
+          --project=${PROJECT_ID} --limit=50 \
+          --format='value(timestamp,textPayload,jsonPayload.message)' || true
+        exit 1
+
+images:
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${_ENV}-${_SHA}"
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${_ENV}-latest"
+
+timeout: 1500s
