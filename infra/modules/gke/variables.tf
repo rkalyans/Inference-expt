@@ -65,6 +65,16 @@ variable "gpu_disk_size_gb" {
   type    = number
   default = 200
 }
+variable "gpu_node_locations" {
+  type        = list(string)
+  description = <<-EOT
+    Explicit zones for the GPU pool. L4 availability is uneven inside a region
+    (e.g. us-east4-b has no L4), so we pin the pool to the zones that do
+    carry it. Leave the cluster itself regional (CPU pool still spreads across
+    all zones).
+  EOT
+  default     = ["us-east4-a", "us-east4-c"]
+}
 
 variable "labels" {
   type    = map(string)

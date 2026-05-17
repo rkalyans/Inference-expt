@@ -139,6 +139,9 @@ resource "google_container_node_pool" "gpu" {
   location = var.region
   cluster  = google_container_cluster.this.name
 
+  # Pin to the zones where L4 is available — see var.gpu_node_locations.
+  node_locations = var.gpu_node_locations
+
   autoscaling {
     min_node_count = var.gpu_min_nodes
     max_node_count = var.gpu_max_nodes
