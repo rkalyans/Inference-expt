@@ -35,20 +35,45 @@ for i in $(seq 1 30); do
   sleep 1
 done
 
+# Fetch an OAuth token from the GCE metadata server. Works on Cloud Run, GCE,
+# GKE — anywhere a Google-issued workload identity exists. Avoids gcloud.
+METADATA_BASE="http://metadata.google.internal/computeMetadata/v1"
+METADATA_HDR="Metadata-Flavor: Google"
+
+fetch_metadata() {
+  curl -fsS -H "${METADATA_HDR}" "${METADATA_BASE}/$1"
+}
+
+fetch_access_token() {
+  fetch_metadata "instance/service-accounts/default/token" | jq -r '.access_token'
+}
+
+# Read the latest version of a Secret Manager secret via REST.
+# Args: $1 = secret_id
+fetch_secret() {
+  local secret_id="$1"
+  local token
+  token=$(fetch_access_token)
+  curl -fsS \
+    -H "Authorization: Bearer ${token}" \
+    "https://secretmanager.googleapis.com/v1/projects/${PROJECT_ID}/secrets/${secret_id}/versions/latest:access" \
+    | jq -r '.payload.data' \
+    | base64 -d
+}
+
 if [ "${USE_IAM_AUTH}" = "true" ]; then
-  PGUSER="$(gcloud config list account --format='value(core.account)' 2>/dev/null || true)"
-  if [ -z "${PGUSER}" ]; then
-    # Running on Cloud Run — fetch the runtime SA email from metadata.
-    PGUSER=$(curl -s -H 'Metadata-Flavor: Google' \
-      http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email)
-  fi
+  # IAM authentication — connect as the runtime service account itself.
+  # Postgres truncates IAM usernames at 63 chars and strips the `.gserviceaccount.com`
+  # suffix; do it explicitly so we don't depend on Postgres heuristics.
+  PGUSER=$(fetch_metadata "instance/service-accounts/default/email")
   PGUSER="${PGUSER%.gserviceaccount.com}"
   export PGUSER
   unset PGPASSWORD
 else
+  # Bootstrap (password) authentication — used on the very first migration so
+  # the IAM user can be granted privileges. Switch to USE_IAM_AUTH=true after.
   export PGUSER="stylist-root"
-  PGPASSWORD=$(gcloud secrets versions access latest \
-    --secret="stylist-${ENV}-pg-root-password" --project="${PROJECT_ID}")
+  PGPASSWORD=$(fetch_secret "stylist-${ENV}-pg-root-password")
   export PGPASSWORD
 fi
 

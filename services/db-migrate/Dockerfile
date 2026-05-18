@@ -4,7 +4,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 
 # psql + cloud-sql-proxy
 RUN apt-get update -qq \
- && apt-get install -y -qq --no-install-recommends postgresql-client wget ca-certificates \
+ && apt-get install -y -qq --no-install-recommends \
+      postgresql-client wget curl jq ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
 RUN wget -q -O /usr/local/bin/cloud-sql-proxy \

@@ -4,6 +4,9 @@
 **/*.tfstate
 **/*.tfstate.*
 **/*.tfvars
+# Local plan artifacts (binary, often contain secrets — never commit).
+**/plan.out
+**/*.tfplan
 !**/*.tfvars.example
 **/crash.log
 **/override.tf
