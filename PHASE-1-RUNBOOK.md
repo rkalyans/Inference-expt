@@ -157,65 +157,117 @@ Watch live: <https://console.cloud.google.com/cloud-build/builds?project=inferen
 
 ### Step 4 — Verify the schema
 
-Connect via the local Auth Proxy (Cloud Shell already has gcloud auth):
+The Cloud SQL instance is **private-IP only** (no public IP), so `cloud-sql-proxy`
+from Cloud Shell cannot reach it directly — Cloud Shell isn't on the VPC. Use
+one of the methods below.
+
+#### 4a (recommended) — Read the migration job logs
+
+The job already prints the table list and `schema_migrations` contents on every
+run, so the Cloud Run Job execution logs are an authoritative record:
 
 ```bash
 PROJECT=inference-expt
-ENV=dev
-INSTANCE="$PROJECT:us-east4:stylist-$ENV-pg"
+REGION=us-east4
 
-# Pull the bootstrap password from Secret Manager
-PGPASSWORD=$(gcloud secrets versions access latest \
-  --secret="stylist-$ENV-pg-root-password" --project=$PROJECT)
+EXEC=$(gcloud run jobs executions list \
+  --job=stylist-dev-db-migrate --region=$REGION --project=$PROJECT \
+  --limit=1 --format='value(name)')
 
-# Start the proxy in the background (uses public IP path via auth tunnel —
-# works from Cloud Shell even though the instance has no public IP)
-cloud-sql-proxy --auto-iam-authn=false --port=15432 "$INSTANCE" &
-PROXY_PID=$!
-sleep 3
+gcloud logging read \
+  "resource.type=cloud_run_job
+   AND resource.labels.job_name=stylist-dev-db-migrate
+   AND labels.\"run.googleapis.com/execution_name\"=$EXEC" \
+  --project=$PROJECT --limit=300 --order=asc \
+  --format='value(textPayload)'
+```
 
-PGPASSWORD=$PGPASSWORD psql -h 127.0.0.1 -p 15432 -U stylist-root -d stylist <<'SQL'
+Look for the `===== Final state of schema_migrations =====` block. Expected:
+
+```
+===== Connecting as stylist-root to stylist =====
+(schema_migrations not yet created — first migration will create it)
+===== Applying migrations in lexical order =====
+----- /app/migrations/0001_init.sql -----
+CREATE TABLE
+…
+===== Final state of schema_migrations =====
+ 0001_init | 2026-…
+```
+
+If you see that block with no errors above it, the schema is in place. Move on
+to Step 5.
+
+#### 4b (optional, dev only) — Interactive psql
+
+The instance is private-IP only, so neither `cloud-sql-proxy` nor
+`gcloud sql connect` can route to it from Cloud Shell out of the box. To open
+an ad-hoc psql session you must briefly attach a public IP **and** allow-list
+your egress IP:
+
+```bash
+PROJECT=inference-expt
+MY_IP=$(curl -s ifconfig.me)
+
+# 1. Attach a public IP + allow-list only your Cloud Shell egress.
+gcloud sql instances patch stylist-dev-pg \
+  --assign-ip \
+  --authorized-networks=$MY_IP/32 \
+  --project=$PROJECT
+
+# 2. Show the bootstrap password (paste when prompted).
+gcloud secrets versions access latest \
+  --secret=stylist-dev-pg-root-password --project=$PROJECT
+
+# 3. Connect.
+gcloud sql connect stylist-dev-pg \
+  --user=stylist-root --database=stylist --project=$PROJECT
+```
+
+At the prompt:
+
+```sql
 \dt
 SELECT version, applied_at FROM schema_migrations ORDER BY version;
-SQL
-
-kill $PROXY_PID
+\q
 ```
 
-Expected:
+**Always run the cleanup** the moment you exit psql:
 
-```
-                  List of relations
- Schema |       Name        | Type  |     Owner
---------+-------------------+-------+----------------
- public | agent_sessions    | table | stylist-root
- public | clothing_items    | table | stylist-root
- public | feedback_events   | table | stylist-root
- public | recommendations   | table | stylist-root
- public | schema_migrations | table | stylist-root
- public | users             | table | stylist-root
+```bash
+gcloud sql instances patch stylist-dev-pg \
+  --no-assign-ip \
+  --clear-authorized-networks \
+  --project=$PROJECT
 
-  version   |          applied_at
-------------+-------------------------------
- 0001_init  | 2026-... ...
+# Verify only PRIVATE remains:
+gcloud sql instances describe stylist-dev-pg --project=$PROJECT \
+  --format='value(ipAddresses[].type)'
 ```
 
-> If `cloud-sql-proxy` is not on PATH in Cloud Shell:
-> ```bash
-> wget -q -O ~/cloud-sql-proxy https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.11.0/cloud-sql-proxy.linux.amd64
-> chmod +x ~/cloud-sql-proxy && export PATH=$HOME:$PATH
-> ```
+> **Never use 4b in staging or prod.** Even briefly attaching a public IP to a
+> production database is a security finding. From those environments, rely on
+> 4a or run psql from a workload inside the VPC (a debug pod on the GKE cluster
+> or a one-shot Cloud Run Job that uses `cloud-sql-proxy --private-ip`).
 
 ### Step 5 — Switch the migration job to IAM auth (optional, recommended)
 
 After the first migration, the `db-migrate-dev-sa` IAM user exists in Postgres
-and can be granted the schema. From the same psql session:
+and can be granted the schema. Open a psql session via Step 4b (`gcloud sql
+connect`) and run:
 
 ```sql
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO "db-migrate-dev-sa@inference-expt.iam";
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO "db-migrate-dev-sa@inference-expt.iam";
 GRANT USAGE ON SCHEMA public TO "db-migrate-dev-sa@inference-expt.iam";
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "db-migrate-dev-sa@inference-expt.iam";
+\q
+```
+
+Then remove the temporary public IP again:
+
+```bash
+gcloud sql instances patch stylist-dev-pg --no-assign-ip --project=inference-expt
 ```
 
 Then flip the job env var:
@@ -229,56 +281,73 @@ gcloud run jobs update stylist-dev-db-migrate \
 Subsequent migrations no longer need the Secret Manager password — the job
 authenticates with its own service-account identity.
 
-### Step 6 — Smoke-test Firestore + Memorystore connectivity
+### Step 6 — Quick data-layer health check
 
-Both are reachable only from inside the VPC (private IPs). Validate by
-running a one-off Cloud Run Job using the agent service account:
+Don't try to hand-roll a redis-cli round-trip from Cloud Shell — Memorystore is
+private-only and the agent and weather services in §1.3 will exercise it for
+real. For §1.1 it's enough to confirm every resource is in a healthy state:
 
 ```bash
+PROJECT=inference-expt
+REGION=us-east4
 ENV=dev
-HOST=$(terraform -chdir=infra/envs/$ENV output -json redis | jq -r .host)
-DB=$(terraform -chdir=infra/envs/$ENV output -raw firestore_database)
 
-# Firestore (uses the Datastore API; works from anywhere with creds):
-gcloud firestore databases describe --database="$DB" --project=$PROJECT_ID
-
-# Redis: from the migration job (same connector + private network):
-gcloud run jobs execute stylist-$ENV-db-migrate --region=$REGION --project=$PROJECT_ID \
-  --wait --args="-c","apt-get install -y -qq redis-tools >/dev/null && \
-    REDIS_AUTH=\$(gcloud secrets versions access latest --secret=stylist-$ENV-redis-auth) && \
-    redis-cli -h $HOST -a \$REDIS_AUTH PING"
+gcloud sql instances describe stylist-$ENV-pg --project=$PROJECT \
+  --format='value(state)'                                  # → RUNNABLE
+gcloud firestore databases describe \
+  --database=stylist-$ENV --project=$PROJECT \
+  --format='value(type,locationId)'                        # → FIRESTORE_NATIVE, nam5 (or your region)
+gcloud redis instances describe stylist-$ENV-redis \
+  --region=$REGION --project=$PROJECT \
+  --format='value(state)'                                  # → READY
 ```
 
-> The job override above is illustrative; in Cloud Shell the simpler check is
-> the `host`/`port` outputs are populated and the connector is `READY`.
+If all three print the values shown, the data plane is healthy. Real
+connectivity is proven later when the agent/inventory/weather services come
+up in §1.3 — there's no value in writing throwaway proxy/redis-cli scripts
+here.
 
 ### Step 7 — Repeat for staging and prod
+
+> **Recommended: defer this until §1.7.** Standing up `stylist-staging-pg` +
+> `stylist-prod-pg` (HA), Firestore, and HA Memorystore burns ~$300+/mo each
+> while you iterate on §1.2–1.6 against dev. Schema, IAM, and service shapes
+> *will* change between now and §1.7, so applying staging+prod now means you
+> reapply them later anyway. Skip ahead to §1.2 and do all three envs as one
+> batch when you reach the promotion-gating phase.
+>
+> If you have a business reason to bring all three envs up immediately
+> (compliance review, parallel team work, etc.), proceed with the loop below.
+
+Same flow, environment by environment:
 
 ```bash
 for E in staging prod; do
   cd ~/Inference-expt/infra/envs/$E
   terraform init -upgrade
   terraform apply
-done
 
-cd ~/Inference-expt
-SHA=$(git rev-parse --short HEAD)
-gcloud builds submit --config=ci/cloudbuild-migrate.yaml --substitutions=_ENV=staging,_SHA=$SHA .
-gcloud builds submit --config=ci/cloudbuild-migrate.yaml --substitutions=_ENV=prod,_SHA=$SHA .
+  cd ~/Inference-expt
+  SHA=$(git rev-parse --short HEAD)
+  gcloud builds submit --config=ci/cloudbuild-migrate.yaml \
+    --substitutions=_ENV=$E,_SHA=$SHA .
+done
 ```
 
-> **Prod is sized larger** (HA Postgres `db-custom-2-7680` + 4GB Redis HA + multi-region Firestore). Plan ~20 min for first apply.
+Then re-run **Step 6** with `ENV=staging` and `ENV=prod`. That's the entire
+validation surface for §1.1.
+
+> **Prod is sized larger** (HA Postgres `db-custom-2-7680` + 4GB Redis HA +
+> multi-region Firestore). Plan ~20 min for the first apply.
 
 ### Step 8 — Exit checklist for §1.1
 
-- [ ] `gcloud sql instances list --project=$PROJECT_ID` shows `stylist-{dev,staging,prod}-pg` all `RUNNABLE`
-- [ ] `gcloud firestore databases list --project=$PROJECT_ID` shows `stylist-{dev,staging,prod}` (3 databases)
-- [ ] `gcloud redis instances list --project=$PROJECT_ID --region=$REGION` shows 3 instances `READY`
-- [ ] `bq ls --project_id=$PROJECT_ID` shows `stylist_<env>_analytics` and `stylist_<env>_training_data` for all envs
-- [ ] All 4 buckets (`clothing-photos`, `agent-sessions`, `model-weights`, `street-feed-frames`) exist for each env
-- [ ] `schema_migrations` contains `0001_init` in all three databases
-- [ ] `agent-orch-dev-sa` cannot read `stylist-prod-pg` (re-run the impersonation test from Phase 0 §10.3 against Cloud SQL)
-- [ ] No project-wide IAM grants leaked — every new role bound this phase has either a `condition` block or is on a per-env SA only
+- [ ] Step 6 health check passes for **dev** (re-run for staging/prod when you bring those up in §1.7)
+- [ ] Migration job logs (Step 4a) show `0001_init` applied in dev
+- [ ] `bq ls --project_id=$PROJECT_ID` shows `stylist_dev_analytics` + `stylist_dev_training_data`
+
+> Cross-project IAM scoping was already validated in Phase 0 §10. No need
+> to re-run those checks unless you've added new bindings here.
 
 ---
 
@@ -485,6 +554,9 @@ data: {"recommendation_id":"<firestore-doc-id>"}
 
 ### Step 6 — Promote to staging and prod
 
+> **Defer until §1.7** unless you have a specific reason to run all envs in
+> parallel — see the callout in §1.1 Step 7.
+
 ```bash
 cd ~/Inference-expt
 SHA=$(git rev-parse --short HEAD)
@@ -507,13 +579,13 @@ done
 
 ### Step 7 — Exit checklist for §1.3
 
-- [ ] `/healthz` returns 200 for all three services in dev (and later staging/prod)
-- [ ] Public probe to `https://api-dev.quantum-23.com/healthz` returns 200 (DNS propagation can take a few minutes)
-- [ ] Direct call to inventory or weather **without** an ID token returns 403
-- [ ] Direct call to inventory from a dev's user account **with** an ID token works (developer is `iam.serviceAccountUser` on the SA used to mint the token, or has direct `run.invoker` via console)
-- [ ] `POST /chat` returns an SSE `final` event whose `recommendation.items` references items by id from the user's inventory
-- [ ] A document appears in Firestore `recommendations` collection with the correct `user_id` and `trace_id` (null for now until §1.6 enables Langfuse)
-- [ ] Cross-env isolation: a token minted for `agent-orch-dev-sa` cannot invoke `stylist-prod-inventory` (HTTP 403)
+- [ ] `/healthz` returns 200 for all three dev services (staging/prod deferred to §1.7)
+- [ ] `POST /chat` (Step 5) emits a `final` SSE event citing the seeded items
+- [ ] Inventory called **without** an ID token returns 403 (one-shot `curl` is enough — proves the service is private)
+
+> Cross-env isolation, CORS hardening, and Firestore `trace_id` capture get
+> exercised by the §1.6 e2e suite and Phase 0 security tests; no need to
+> hand-verify them here.
 
 ---
 
@@ -690,32 +762,24 @@ The agent's `LLM_MODE` flips from `stub` to `openai` automatically (`LLM_MODE = 
 
 ### Step 7 — Smoke test the LLM-driven agent
 
+Re-run the §1.3 chat curl. The single difference that confirms GKE is wired
+in: the SSE stream now includes `tool_call` events (stub mode emitted none)
+and the `final` text is LLM-generated, not boilerplate.
+
 ```bash
 ENV=dev
 AGENT_URL=$(gcloud run services describe stylist-$ENV-agent \
   --project=inference-expt --region=us-east4 --format='value(status.url)')
+USER_ID="<uuid from §1.3 Step 5>"
 
-# (Re-use a user_id from §1.3 Step 5, or create a new one)
-USER_ID="<uuid from before>"
-
-curl -N -sS -X POST $AGENT_URL/chat \
-  -H 'content-type: application/json' \
-  -d "{\"user_id\":\"$USER_ID\",\"query\":\"It's drizzling in midtown — what should I wear to a casual brunch?\",\"zone\":\"midtown\"}"
-```
-
-You should now see `tool_call` events emitted by the LLM (in stub mode there were none), and a `final` event whose text was generated by Mistral.
-
-Direct sanity check against vLLM via Cloud Run (uses the same VPC path the agent uses):
-
-```bash
-# From inside Cloud Shell, route through the agent's connector:
-gcloud run services proxy stylist-$ENV-agent --region=us-east4 &
-# Or curl from within the agent pod via Cloud Run's exec UI:
-gcloud run services exec stylist-$ENV-agent --region=us-east4 -- \
-  curl -sS http://$VLLM_IP/v1/models | jq
+curl -N -sS -X POST $AGENT_URL/chat -H 'content-type: application/json' \
+  -d "{\"user_id\":\"$USER_ID\",\"query\":\"drizzling in midtown — casual brunch outfit?\",\"zone\":\"midtown\"}"
 ```
 
 ### Step 8 — Promote to staging and prod
+
+> **Defer until §1.7** — same reasoning as §1.1 Step 7. GKE GPU pools
+> in particular are expensive to keep idle.
 
 ```bash
 for E in staging prod; do
@@ -746,13 +810,9 @@ Optional cron via Cloud Scheduler — left for Phase 2.
 
 ### Step 10 — Exit checklist for §1.2
 
-- [ ] `kubectl get nodes` shows a Ready node in each pool (dev: cpu Ready, gpu may be 0)
-- [ ] `kubectl -n inference get pods` — `vllm`, `triton`, `qdrant-0` all Running and Ready
-- [ ] `kubectl -n inference get svc` — all three Services have a `LoadBalancer Ingress` IP in the env's primary subnet CIDR (10.10.0.0/20 for dev, etc.)
-- [ ] `curl http://$VLLM_IP/v1/models` from Cloud Shell via IAP/bastion returns Mistral
-- [ ] `POST /chat` to the agent now emits `tool_call` events whose `name` includes `get_weather` and `search_inventory`
-- [ ] A Firestore `recommendations` doc has been created with `trace_id` non-null (Langfuse capture)
-- [ ] `terraform output gke` returns the cluster name in each env
+- [ ] `kubectl -n inference get pods` — `vllm`, `triton`, `qdrant-0` all Running/Ready
+- [ ] `kubectl -n inference get svc` — all three have a LoadBalancer Ingress IP
+- [ ] `POST /chat` (Step 7) emits `tool_call` events and a Mistral-generated `final`
 
 ---
 
@@ -885,6 +945,8 @@ open https://app-dev.quantum-23.com
 
 ### Step 6 — Promote to staging and prod
 
+> **Defer until §1.7** unless staging/prod are already up — see §1.1 Step 7.
+
 ```bash
 for E in staging prod; do
   (cd ~/Inference-expt/infra/envs/$E && terraform apply)
@@ -900,19 +962,12 @@ Prod-specific:
 
 ### Step 7 — Exit checklist for §1.4
 
-- [ ] `https://app-<env>.quantum-23.com/` returns 200 with the landing page
-- [ ] Onboarding round-trip creates a user row (verify in Cloud SQL or via
-  `gcloud sql connect`).
-- [ ] Image upload appears in `gs://stylist-<env>-clothing-photos/` with a
-  uuid object name and is served back via the GCS public URL in `/wardrobe`.
-- [ ] `/chat` streams `thought` → `tool_call` → `tool_result` → `final` events
-  visually; the rendered outfit cites real items from the wardrobe.
-- [ ] CORS preflight from `https://app-<env>.quantum-23.com` to
-  `https://api-<env>.quantum-23.com/api/items` returns
-  `Access-Control-Allow-Origin: https://app-<env>.quantum-23.com` (not `*`).
-- [ ] Cross-origin request from a different origin (e.g. `https://example.com`)
-  is rejected by CORS.
-- [ ] `terraform output frontend_service_uri` and DNS both resolve for each env.
+- [ ] `https://app-<env>.quantum-23.com/` returns the landing page
+- [ ] Onboarding → wardrobe photo upload → `/chat` end-to-end works in a real browser (Step 5)
+- [ ] `/chat` SSE renders a `final` outfit citing items from the wardrobe
+
+> CORS edge cases and cross-origin rejection are covered by the §1.6 e2e
+> suite (`auth.spec.ts`); skip the manual preflight curls here.
 
 ---
 
@@ -1064,23 +1119,20 @@ curl -sS -i https://api-dev.quantum-23.com/api/users/me \
 
 ### Step 6 — Promote
 
-Same gcloud invocations against `_ENV=staging` and `_ENV=prod`. Each env has
-its own Firebase project and its own set of `_FB_*` substitutions.
+> **Defer until §1.7** unless staging/prod are already up — see §1.1 Step 7.
+> Each env has its own Firebase project and its own `_FB_*` substitutions,
+> so this step won't be a no-op when you do come back to it.
+
+Same gcloud invocations against `_ENV=staging` and `_ENV=prod`.
 
 ### Step 7 — Exit checklist for §1.5
 
-- [ ] Sign-in via email magic link works on `app-<env>.quantum-23.com`.
-- [ ] Sign-in via Google works on the same domain (it's in authorized domains).
-- [ ] `GET /api/users/me` returns 401 without a bearer token, 401 with a
-  forged token, 200 with a valid one.
-- [ ] First successful sign-in for a brand-new email creates a row in
-  Cloud SQL `users` (verify with `gcloud sql connect`).
-- [ ] Wardrobe and chat work end-to-end without any `user_id` ever appearing
-  in client request bodies/URLs.
-- [ ] Sign out (header user menu) clears the session and bouncing to
-  `/wardrobe` redirects to `/login?next=%2Fwardrobe`.
-- [ ] Token expiry is handled: leaving the tab open >1h still works (Firebase
-  auto-refreshes via `onIdTokenChanged`).
+- [ ] Magic-link **or** Google sign-in works on `app-<env>.quantum-23.com`
+- [ ] `GET /api/users/me` returns 401 without a token and 200 with a valid one (Step 5)
+- [ ] After sign-in, wardrobe + chat work without any `user_id` in client requests
+
+> First-login user-row creation, sign-out redirect, and token auto-refresh
+> are all asserted by the §1.6 e2e suite — don't re-test by hand.
 
 ---
 
@@ -1210,17 +1262,13 @@ the next environment. For now you can:
 
 ### Step 6 — Exit checklist for §1.6
 
-- [ ] `npm test` in `tests/e2e/` is green locally against `dev`.
-- [ ] `cloudbuild-e2e.yaml` is green when triggered manually against `dev`.
-- [ ] HTML report is reachable in
-  `gs://<project>_cloudbuild/e2e/<build_id>/playwright-report.zip` after both
-  a passing and a (forced-) failing run.
-- [ ] Forcing a failure (e.g. break `useRequireAuth` and redeploy) makes
-  `auth.spec.ts` fail — proving the gate isn't a no-op.
-- [ ] A second e2e run against the same env doesn't leave stray wardrobe rows
-  (the wardrobe spec is self-cleaning; verify with `gcloud sql connect`).
-- [ ] Cloud Build SA has `roles/secretmanager.secretAccessor` on
-  `e2e-test-email` and `e2e-test-password` in each env.
+- [ ] `npm test` in `tests/e2e/` is green locally against `dev`
+- [ ] `cloudbuild-e2e.yaml` is green when triggered manually against `dev`
+- [ ] HTML report uploaded to `gs://<project>_cloudbuild/e2e/<build_id>/playwright-report.zip`
+
+> A "forced-failure" sanity run (break `useRequireAuth`, redeploy, watch
+> `auth.spec.ts` fail) is worth doing **once** when you first wire the gate —
+> not on every promotion.
 
 ---
 
