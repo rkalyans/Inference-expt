@@ -20,6 +20,11 @@ and idempotent. Tick the boxes as you go.
 
 ## 1.1 Data Layer (Week 2)
 
+> **Pause & resume:** to drop the bill to ~$0.10/day between sessions, run
+> `/teardown-dev` (or follow the [Pause & Resume appendix](#appendix--pausing-dev-between-implementation-phases)).
+> Coming back, run **R0** in the appendix — you're back to the state at the
+> end of this section.
+
 **Why this matters for the recommender**
 
 The NYC weather-based clothing recommender is only as good as the wardrobe
@@ -353,6 +358,10 @@ validation surface for §1.1.
 
 ## 1.3 Backend Services (Week 3)
 
+> **Pause & resume:** `/teardown-dev` between sessions. To resume here, run
+> **R0**, then re-deploy weather, inventory, agent via
+> `cloudbuild-service.yaml` (Step 3) and re-apply the §1.3 Step 4 GRANTs.
+
 **Why this matters for the recommender**
 
 This is the sub-phase where the recommender stops being a plan and starts
@@ -591,6 +600,11 @@ done
 
 ## 1.2 GKE Inference Cluster (Week 3)
 
+> **Pause & resume:** GKE is the most expensive idle resource (~$2.40/day for
+> the regional cluster fee alone). Always `/teardown-dev` between sessions.
+> To resume here, run **R0**, then re-run §1.2 Steps 3 → 6 (`get-credentials`,
+> secrets, FashionCLIP repo upload, k8s manifests, tfvars round-trip).
+
 **Why this matters for the recommender**
 
 The recommender's whole pitch is “it *reasons* about your outfit like a
@@ -818,6 +832,10 @@ Optional cron via Cloud Scheduler — left for Phase 2.
 
 ## 1.4 Frontend (Week 4)
 
+> **Pause & resume:** `/teardown-dev` between sessions. To resume here, run
+> **R0**, restore §1.2 and §1.3 (see their callouts), then re-deploy the
+> frontend via `cloudbuild-frontend.yaml` (Step 4).
+
 **Why this matters for the recommender**
 
 The recommender becomes a *product* in this sub-phase. Two surfaces ship:
@@ -972,6 +990,11 @@ Prod-specific:
 ---
 
 ## 1.5 Auth (Week 5)
+
+> **Pause & resume:** `/teardown-dev` between sessions. Firebase project +
+> web app config persist across destroys (they live in the Firebase console,
+> not Terraform), so resume = **R0** + §1.2 / §1.3 / §1.4 redeploys + the §1.5
+> Step 4 builds with `_FB_*` substitutions.
 
 **Why this matters for the recommender**
 
@@ -1137,6 +1160,11 @@ Same gcloud invocations against `_ENV=staging` and `_ENV=prod`.
 ---
 
 ## 1.6 E2E tests (Week 6)
+
+> **Pause & resume:** `/teardown-dev` between sessions. The e2e test user in
+> Firebase Auth and the `e2e-test-*` secrets all persist. Resume = the chain
+> through §1.5, then `gcloud builds submit --config=ci/cloudbuild-e2e.yaml ...`
+> to re-validate.
 
 **Why this matters for the recommender**
 
@@ -1337,6 +1365,7 @@ the next environment. For now you can:
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `403 Forbidden` from agent → inventory | Missing `run.invoker` on the target service | `terraform apply` again — the binding is `google_cloud_run_v2_service_iam_member.agent_invokes_inventory` |
+| `cloudbuild-service.yaml` smoke-test fails for weather/inventory with `404` and `gcloud auth print-identity-token: No identity token can be obtained` | Cloud Build's default worker pool is outside your VPC, so it cannot reach `INGRESS_TRAFFIC_INTERNAL_ONLY` services (returns 404 from GFE before auth). | Already handled in `cloudbuild-service.yaml`: smoke-test verifies revision `Ready` for internal services and only HTTP-probes public ones. End-to-end probing happens from Cloud Shell in §1.3 Step 5. |
 | Inventory pod 500s with `permission denied for table users` | Postgres GRANTs not run for the IAM user | Run Step 4 — `GRANT ... ON ALL TABLES TO "inventory-$ENV-sa@..."` |
 | Weather pod returns 502 for every request | OWM key secret not accessible | `gcloud secrets get-iam-policy openweathermap-api-key` should list `weather-<env>-sa`; re-apply Terraform |
 | `api-dev.quantum-23.com` returns NXDOMAIN | DNS propagation in progress | Wait 1–5 min; verify `gcloud dns record-sets list --zone=quantum-23-com \| grep api-` |
@@ -1354,3 +1383,123 @@ the next environment. For now you can:
 | Migration job exits with `connection refused` to 127.0.0.1:5432 | VPC connector not attached, or PSA not peered yet | `gcloud run jobs describe stylist-${ENV}-db-migrate --format='value(template.template.vpcAccess)'` should show the connector |
 | `psql: FATAL: PAM authentication failed for user "...iam"` from the migration job | First-run: IAM user has no schema privileges | Step 5 — keep `USE_IAM_AUTH=false` for first run, then GRANT and flip |
 | `terraform destroy` complains Cloud SQL has `deletion_protection_enabled` | Prod safety guard | Set the guard off via `gcloud sql instances patch ... --no-deletion-protection` first |
+
+---
+
+## Appendix — Pausing dev between implementation phases
+
+Once you have anything beyond §1.1 applied, dev burns roughly:
+
+| Resource | Idle $/day |
+|---|---|
+| Cloud SQL `stylist-dev-pg` | ~$0.40 |
+| Memorystore `stylist-dev-redis` (1 GB BASIC) | ~$1.15 |
+| Serverless VPC connector (in `shared`) | ~$1.80 |
+| GKE regional cluster mgmt + 1 cpu node | ~$2.40 |
+| Cloud Run services (if any have `min_instances ≥ 1`) | up to $2.50 |
+| Monitoring + networking + DNS + logging | ~$0.45 |
+| **Total at §1.2+** | **~$7–9/day** |
+
+None of these can be meaningfully paused (Memorystore has no stop, GKE charges
+the mgmt fee even at 0 nodes, the VPC connector charges per min instance).
+The only path to ~$0/day is **`terraform destroy`** on the env stack(s).
+
+### Tear down
+
+```bash
+PROJECT=inference-expt
+REGION=us-east4
+
+# 1. (If §1.2 is up) Scale GKE workloads down so destroy doesn't wait on
+#    pod-disruption / PV detach timeouts.
+gcloud container clusters get-credentials stylist-dev-gke \
+  --region=$REGION --project=$PROJECT 2>/dev/null && \
+  kubectl -n inference scale deploy --all --replicas=0 || true
+
+# 2. Destroy the dev env stack (kills GKE, Cloud Run, Cloud SQL, Redis).
+cd ~/Inference-expt/infra/envs/dev
+terraform destroy -auto-approve
+
+# 3. (Optional, recommended for >2-day pauses) Destroy `shared` too — kills
+#    the ~$1.80/day VPC connector and ~$0.20/day NAT idle costs.
+cd ~/Inference-expt/infra/envs/shared
+terraform destroy -auto-approve
+```
+
+What this deletes (all recreatable from git + state):
+- Cloud SQL `stylist-dev-pg` **including data** — migrations live in
+  `services/db-migrate/migrations/`, so the schema comes back on resume
+- Memorystore `stylist-dev-redis` — cache, no persistent state
+- All Cloud Run services + jobs in dev
+- GKE cluster + node pools (if §1.2 was applied)
+- ILB forwarding rules
+
+What's preserved (cents/month total):
+- Terraform state in `gs://inference-expt-tf-state/`
+- Container images in Artifact Registry
+- GCS bucket contents (`stylist-dev-clothing-photos`, etc.)
+- DNS zone, PSA peering, VPC connector, Artifact Registry — these live in the
+  `shared` stack which you **do not** destroy (slow + expensive to recreate)
+
+Verify the bill went quiet (next-day check):
+
+```bash
+gcloud billing accounts list
+# Then in the console: Billing → Reports → filter project=inference-expt
+# Should drop to <$0.10/day within 24h of destroy.
+```
+
+### Resume
+
+Always start with the foundation, then add only the layers you actually need
+again. Each block below is **idempotent** — safe to re-run if it half-fails.
+
+#### R0 — Foundation (always run first)
+
+```bash
+cd ~/Inference-expt
+git pull --ff-only origin main
+
+# If you destroyed `shared` in tear-down step 3, bring it back first (~15 min).
+cd infra/envs/shared
+terraform init -upgrade
+terraform apply -auto-approve
+
+# Dev data + IAM + Cloud Run skeletons (~15 min; Cloud SQL is the long pole).
+cd ~/Inference-expt/infra/envs/dev
+terraform init -upgrade
+terraform apply -auto-approve
+
+# Re-apply schema migrations (Cloud SQL is fresh — has no tables yet).
+cd ~/Inference-expt
+SHA=$(git rev-parse --short HEAD)
+gcloud builds submit --config=ci/cloudbuild-migrate.yaml \
+  --substitutions=_ENV=dev,_SHA=$SHA .
+```
+
+After R0 you have: VPC, PSA, VPC connector, DNS, Artifact Registry, Cloud SQL
+(empty + migrated), Firestore, Memorystore, BigQuery datasets, GCS buckets,
+all dev service accounts, and any `hello-world` Cloud Run stubs.
+
+#### Per-phase resume matrix
+
+Run the row matching the **furthest phase you had completed** before tearing
+down. Each row includes the previous rows' work via R0 + Terraform state, so
+you don't need to chain them.
+
+| Last completed phase | What to run after R0 |
+|---|---|
+| **§1.1** Data layer | Nothing — R0 already restored everything in §1.1 |
+| **§1.2** GKE | Re-run §1.2 Steps 3 → 6 (`get-credentials`, secrets, FashionCLIP repo, manifests, ILB tfvars round-trip) |
+| **§1.3** Backend services | After §1.2 work above (if applicable): `gcloud builds submit --config=ci/cloudbuild-service.yaml --substitutions=_SERVICE=…,_ENV=dev,_SHA=$SHA .` for each of weather, inventory, agent. Then re-run §1.3 Step 4 GRANTs. |
+| **§1.4** Frontend | All of §1.3 above, then `gcloud builds submit --config=ci/cloudbuild-frontend.yaml --substitutions=_ENV=dev,_SHA=$SHA .` |
+| **§1.5** Auth | All of §1.4 above. Firebase project + web app config are **not** in Terraform — they persist across destroys, no rebuild needed. |
+| **§1.6** E2E tests | All of §1.5 above. The e2e test user in Firebase Auth also persists. Just run `gcloud builds submit --config=ci/cloudbuild-e2e.yaml ...` to re-validate. |
+
+Each row adds roughly 10–15 minutes on top of R0. Worst case (§1.6 from a full
+teardown including `shared`): ~75 minutes wall-clock, almost all unattended.
+
+#### One-shot resume helper
+
+For convenience, the `/resume-dev` workflow (`.windsurf/workflows/resume-dev.md`)
+runs R0 + you pick the phase from a prompt.
