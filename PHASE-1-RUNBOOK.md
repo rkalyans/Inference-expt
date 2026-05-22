@@ -471,34 +471,34 @@ Watch live: <https://console.cloud.google.com/cloud-build/builds?project=inferen
 
 The migration job already created the `stylist` schema as `stylist-root`.
 `inventory-dev-sa` exists as a Postgres IAM user but has no privileges yet.
-Grant them once (Cloud Shell, via Cloud SQL Auth Proxy):
+
+> **Why not just `psql` from Cloud Shell?** Because Cloud SQL is configured
+> with no public IP (private-only, by design). Cloud Shell isn't in your VPC,
+> so `cloud-sql-proxy` from there fails with `instance does not have IP of
+> type "PUBLIC"`. Instead, we add the GRANTs as a migration and let the
+> in-VPC `db-migrate` Cloud Run Job apply them as `stylist-root`.
+
+The migration `db/migrations/0002_grant_inventory.sql` discovers any
+`inventory-*-sa@*.iam` role in `pg_roles` and grants it the env-appropriate
+privileges — so the same file works in dev, staging, and prod.
+
+Trigger it by re-running the same Cloud Build that applied `0001_init`:
 
 ```bash
-PROJECT=inference-expt
-ENV=dev
-INSTANCE="$PROJECT:us-east4:stylist-$ENV-pg"
-
-PGPASSWORD=$(gcloud secrets versions access latest \
-  --secret="stylist-$ENV-pg-root-password" --project=$PROJECT)
-
-cloud-sql-proxy --port=15432 "$INSTANCE" &
-PROXY_PID=$!
-sleep 3
-
-PGPASSWORD=$PGPASSWORD psql -h 127.0.0.1 -p 15432 -U stylist-root -d stylist <<SQL
-GRANT USAGE ON SCHEMA public TO "inventory-$ENV-sa@$PROJECT.iam";
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "inventory-$ENV-sa@$PROJECT.iam";
-GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO "inventory-$ENV-sa@$PROJECT.iam";
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "inventory-$ENV-sa@$PROJECT.iam";
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON SEQUENCES TO "inventory-$ENV-sa@$PROJECT.iam";
-SQL
-
-kill $PROXY_PID
+cd ~/Inference-expt
+git pull --ff-only origin main
+SHA=$(git rev-parse --short HEAD)
+gcloud builds submit --config=ci/cloudbuild-migrate.yaml \
+  --substitutions=_ENV=dev,_SHA=$SHA .
 ```
 
-> One-time per env. Run again only if you add new tables in a future migration
-> and want the IAM user to access them automatically (the `ALTER DEFAULT
-> PRIVILEGES` clause handles future tables).
+Watch the job's logs (Cloud Logging) for `NOTICE:  Granted CRUD privileges
+to inventory-dev-sa@inference-expt.iam`. Both `0001_init.sql` and
+`0002_grant_inventory.sql` are idempotent, so re-running is safe.
+
+> One-time per env. Future migrations that add tables will automatically be
+> readable/writable by the inventory SA thanks to the `ALTER DEFAULT
+> PRIVILEGES` clauses in `0002_grant_inventory.sql`.
 
 ### Step 5 — Smoke test the agent end-to-end
 
@@ -1368,6 +1368,7 @@ the next environment. For now you can:
 | `cloudbuild-service.yaml` smoke-test fails for weather/inventory with `404` and `gcloud auth print-identity-token: No identity token can be obtained` | Cloud Build's default worker pool is outside your VPC, so it cannot reach `INGRESS_TRAFFIC_INTERNAL_ONLY` services (returns 404 from GFE before auth). | Already handled in `cloudbuild-service.yaml`: smoke-test verifies revision `Ready` for internal services and only HTTP-probes public ones. End-to-end probing happens from Cloud Shell in §1.3 Step 5. |
 | Inventory pod 500s with `permission denied for table users` | Postgres GRANTs not run for the IAM user | Run Step 4 — `GRANT ... ON ALL TABLES TO "inventory-$ENV-sa@..."` |
 | Inventory startup probe fails with `ImportError: email-validator is not installed` | pydantic's `EmailStr` needs an optional dep | Confirm `pydantic[email]==2.9.2` (not bare `pydantic`) in `services/inventory-api/requirements.txt`; rebuild |
+| `cloud-sql-proxy` from Cloud Shell errors with `instance does not have IP of type "PUBLIC"` | Cloud SQL instance is private-only and Cloud Shell isn't in your VPC | Don't try to `psql` from Cloud Shell. Add the SQL to `db/migrations/000N_*.sql` and re-run `gcloud builds submit --config=ci/cloudbuild-migrate.yaml ...`. Cloud Run Job runs inside the VPC. |
 | Weather pod returns 502 for every request | OWM key secret not accessible | `gcloud secrets get-iam-policy openweathermap-api-key` should list `weather-<env>-sa`; re-apply Terraform |
 | `api-dev.quantum-23.com` returns NXDOMAIN | DNS propagation in progress | Wait 1–5 min; verify `gcloud dns record-sets list --zone=quantum-23-com \| grep api-` |
 | Agent stream returns `error` event with `LLM_BASE_URL must be set` | `LLM_MODE=openai` set before §1.2 deployed vLLM | Switch back to `LLM_MODE=stub` until vLLM is ready |
