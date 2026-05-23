@@ -88,7 +88,8 @@ steps:
         # rolled out cleanly.
         INGRESS=$$(gcloud run services describe $$SERVICE \
           --project=${PROJECT_ID} --region=${_REGION} \
-          --format='value(metadata.annotations.run\.googleapis\.com/ingress)')
+          --format='json' \
+          | python3 -c 'import json,sys; print(json.load(sys.stdin).get("metadata",{}).get("annotations",{}).get("run.googleapis.com/ingress",""))')
         echo "===== ingress=$$INGRESS ====="
 
         echo "===== Verifying latest revision is Ready ====="

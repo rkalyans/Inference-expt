@@ -500,66 +500,51 @@ to inventory-dev-sa@inference-expt.iam`. Both `0001_init.sql` and
 > readable/writable by the inventory SA thanks to the `ALTER DEFAULT
 > PRIVILEGES` clauses in `0002_grant_inventory.sql`.
 
-### Step 5 — Smoke test the agent end-to-end
+### Step 5 — Smoke test the wiring
 
-The agent is public; weather + inventory are private. The agent's runtime SA
-mints OIDC tokens to call them internally. To seed test data we use a
-developer ID token (the human running this runbook needs `roles/run.invoker`
-on the inventory service, which they get via `roles/run.admin` on the project).
+What §1.3 needs to prove is "the services booted and can talk to their
+dependencies." Two cheap checks that require zero ingress mutation and zero
+seeded data are sufficient:
 
 ```bash
+PROJECT=inference-expt
+REGION=us-east4
 ENV=dev
-INVENTORY_URL=$(gcloud run services describe stylist-$ENV-inventory \
-  --project=inference-expt --region=us-east4 --format='value(status.url)')
+
 AGENT_URL=$(gcloud run services describe stylist-$ENV-agent \
-  --project=inference-expt --region=us-east4 --format='value(status.url)')
+  --project=$PROJECT --region=$REGION --format='value(status.url)')
 
-# Inventory is private. Use Cloud Build / human-developer ID token to seed
-# data; in normal operation only the agent SA can reach it.
-TOKEN=$(gcloud auth print-identity-token --audiences=$INVENTORY_URL)
+# (1) Agent /healthz — proves the service booted with all required env wired,
+#     Firestore + GCS clients constructed, etc.
+curl -sS "$AGENT_URL/healthz" | jq .   # → {"status":"ok",...}
 
-# 1) Get-or-create user
-USER_JSON=$(curl -sS -X POST $INVENTORY_URL/users \
-  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
-  -d '{"email":"dev@quantum-23.com","preferences":{"style":"smart-casual"}}')
-USER_ID=$(echo $USER_JSON | jq -r .id)
-echo "user_id=$USER_ID"
-
-# 2) Add three sample items
-for body in \
-  '{"name":"Navy crewneck","category":"top","attributes":{"warmth":4,"color":"navy"}}' \
-  '{"name":"Black chinos","category":"bottom","attributes":{"warmth":4,"color":"black"}}' \
-  '{"name":"White sneakers","category":"footwear","attributes":{"warmth":2,"color":"white"}}'
-do
-  curl -sS -X POST "$INVENTORY_URL/items?user_id=$USER_ID" \
-    -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
-    -d "$body" | jq -c '{id,name,category}'
+# (2) Inventory + weather revisions are Ready (the Cloud Build smoke step
+#     already asserts this, but a one-liner here confirms).
+for s in weather inventory; do
+  gcloud run services describe stylist-$ENV-$s \
+    --project=$PROJECT --region=$REGION \
+    --format='value(name,status.conditions[0].type,status.conditions[0].status)'
 done
-
-# 3) Ask the agent (public; SSE)
-curl -N -sS -X POST $AGENT_URL/chat \
-  -H 'content-type: application/json' \
-  -d "{\"user_id\":\"$USER_ID\",\"query\":\"what should I wear for a walk?\",\"zone\":\"midtown\"}"
+# Expect: each line ends with "Ready  True"
 ```
 
-You should see SSE events:
+That's it for §1.3. The deeper checks intentionally live where they make sense:
 
-```
-event: thought
-data: {"event":"thought","text":"Stub agent: planning ..."}
+- **Agent's `/chat` end-to-end** (real Firebase JWT, full tool chain, Firestore
+  trace) — §1.5 Step 5, once Firebase Auth is provisioned. The agent's
+  `/chat` is JWT-gated by design, so smoking it before §1.5 would require
+  a temporary auth bypass that doesn't reflect production.
+- **Wardrobe seeding + multi-turn chat through a browser** — §1.4 Step 5.
+- **Cross-cutting regression suite** (auth, CORS, signed URLs, SSE) — §1.6
+  Playwright run against the deployed dev env.
 
-event: tool_result
-data: {"event":"tool_result","name":"get_weather","result":{...}}
-
-event: tool_result
-data: {"event":"tool_result","name":"search_inventory","result":{"items":[...]}}
-
-event: final
-data: {"event":"final","recommendation":{"items":[...],"rationale":"...","weather":{...}}}
-
-event: saved
-data: {"recommendation_id":"<firestore-doc-id>"}
-```
+> **Why no CLI seed/chat here?** The production call graph is *browser →
+> agent → (weather, inventory)*. Humans never touch inventory directly.
+> A Cloud-Shell smoke that flips inventory's ingress to `all`, mints
+> developer ID tokens, and POSTs JSON straight at the service is testing
+> a path that doesn't exist in prod — and tearing down that scaffolding
+> after every session adds friction without hardening anything. Keep this
+> step cheap; let §1.4 / §1.5 / §1.6 do the heavy lifting on real paths.
 
 ### Step 6 — Promote to staging and prod
 
@@ -588,13 +573,14 @@ done
 
 ### Step 7 — Exit checklist for §1.3
 
-- [ ] `/healthz` returns 200 for all three dev services (staging/prod deferred to §1.7)
-- [ ] `POST /chat` (Step 5) emits a `final` SSE event citing the seeded items
-- [ ] Inventory called **without** an ID token returns 403 (one-shot `curl` is enough — proves the service is private)
+- [ ] Agent `/healthz` returns 200 (Step 5 part 1)
+- [ ] Weather + inventory revisions report `Ready=True` (Step 5 part 2)
+- [ ] Cloud Build smoke step passed for all three services (revision Ready confirmed inside CI; see §1.3 troubleshooting note for why no HTTP probe on private services)
 
-> Cross-env isolation, CORS hardening, and Firestore `trace_id` capture get
-> exercised by the §1.6 e2e suite and Phase 0 security tests; no need to
-> hand-verify them here.
+> Full `/chat` end-to-end + inventory-without-token (403) + CORS + Firestore
+> trace assertions are deferred to §1.5 Step 5 and §1.6, where they can run
+> against the real production code path (Firebase JWT, browser → public
+> agent → VPC-internal tools) without ingress mutation.
 
 ---
 
@@ -1369,6 +1355,7 @@ the next environment. For now you can:
 | Inventory pod 500s with `permission denied for table users` | Postgres GRANTs not run for the IAM user | Run Step 4 — `GRANT ... ON ALL TABLES TO "inventory-$ENV-sa@..."` |
 | Inventory startup probe fails with `ImportError: email-validator is not installed` | pydantic's `EmailStr` needs an optional dep | Confirm `pydantic[email]==2.9.2` (not bare `pydantic`) in `services/inventory-api/requirements.txt`; rebuild |
 | `cloud-sql-proxy` from Cloud Shell errors with `instance does not have IP of type "PUBLIC"` | Cloud SQL instance is private-only and Cloud Shell isn't in your VPC | Don't try to `psql` from Cloud Shell. Add the SQL to `db/migrations/000N_*.sql` and re-run `gcloud builds submit --config=ci/cloudbuild-migrate.yaml ...`. Cloud Run Job runs inside the VPC. |
+| `jq: parse error: Invalid numeric literal` when curling inventory from Cloud Shell | Inventory is `INGRESS_TRAFFIC_INTERNAL_ONLY`; Cloud Shell isn't in your VPC, so GFE returned an HTML 404 page (not JSON) | Use `gcloud run services proxy stylist-$ENV-inventory --port=8081 &` and point curl at `http://localhost:8081`. The proxy tunnels via the Cloud Run admin API and attaches your developer ID token. |
 | Weather pod returns 502 for every request | OWM key secret not accessible | `gcloud secrets get-iam-policy openweathermap-api-key` should list `weather-<env>-sa`; re-apply Terraform |
 | `api-dev.quantum-23.com` returns NXDOMAIN | DNS propagation in progress | Wait 1–5 min; verify `gcloud dns record-sets list --zone=quantum-23-com \| grep api-` |
 | Agent stream returns `error` event with `LLM_BASE_URL must be set` | `LLM_MODE=openai` set before §1.2 deployed vLLM | Switch back to `LLM_MODE=stub` until vLLM is ready |
