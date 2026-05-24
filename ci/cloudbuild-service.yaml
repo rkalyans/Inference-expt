@@ -113,17 +113,17 @@ steps:
           URL=$$(gcloud run services describe $$SERVICE \
             --project=${PROJECT_ID} --region=${_REGION} --format=json \
             | python3 -c '
-import json, sys
-svc = json.load(sys.stdin)
-urls_raw = svc.get("metadata", {}).get("annotations", {}).get("run.googleapis.com/urls", "[]")
-try:
-    urls = json.loads(urls_raw)
-except Exception:
-    urls = []
-# Prefer the new-format URL (contains ".<region>.run.app", not ".a.run.app")
-new_fmt = [u for u in urls if ".a.run.app" not in u]
-print(new_fmt[0] if new_fmt else (urls[0] if urls else svc.get("status", {}).get("url", "")))
-')
+        import json, sys
+        svc = json.load(sys.stdin)
+        urls_raw = svc.get("metadata", {}).get("annotations", {}).get("run.googleapis.com/urls", "[]")
+        try:
+            urls = json.loads(urls_raw)
+        except Exception:
+            urls = []
+        # Prefer the new-format URL (does not contain ".a.run.app")
+        new_fmt = [u for u in urls if ".a.run.app" not in u]
+        print(new_fmt[0] if new_fmt else (urls[0] if urls else svc.get("status", {}).get("url", "")))
+        ')
           echo "===== Public service: probing $$URL/api/health unauthenticated ====="
           for i in 1 2 3 4 5 6 7 8; do
             CODE=$$(curl -sS -o /tmp/h -w '%{http_code}' "$$URL/api/health" || echo "000")
