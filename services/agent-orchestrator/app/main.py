@@ -1,7 +1,7 @@
 """Agent Orchestrator service.
 
 Endpoints:
-  GET  /healthz
+  GET  /api/health
   POST /chat                  -> JSON request, SSE response stream
 
 Phase 1 keeps auth simple: pass `user_id` in the body. Phase 1.5 wires
@@ -65,7 +65,10 @@ app.add_middleware(
 app.include_router(bff_router)
 
 
-@app.get("/healthz")
+# NOTE: We use `/api/health` instead of `/healthz` because Google's edge
+# frontend intercepts `/healthz` (and `/health`, `/ready`) and returns its
+# own 404 before traffic reaches the Cloud Run container. See Troubleshooting (1.3).
+@app.get("/api/health")
 async def healthz():
     return {"status": "ok", "service": "agent-orchestrator"}
 

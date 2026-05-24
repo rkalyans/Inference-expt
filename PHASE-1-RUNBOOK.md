@@ -442,7 +442,11 @@ terraform output -json service_accounts | jq
 ```
 
 > The three Cloud Run services boot with the placeholder `hello` image at this
-> point. `/healthz` returns 404 until Step 3 deploys the real images.
+> point. `/api/health` returns 404 until Step 3 deploys the real images.
+>
+> **Note on path:** we use `/api/health` (not `/healthz`) because Cloud Run's
+> edge frontend intercepts `/healthz`, `/health`, `/ready` and serves its own
+> 404 page before traffic reaches the container. See Troubleshooting (1.3).
 
 ### Step 3 — Build & deploy each service
 
@@ -463,7 +467,7 @@ Each build:
 1. Builds `services/<_SERVICE>/Dockerfile`
 2. Pushes two tags (`dev-$SHA`, `dev-latest`) to Artifact Registry
 3. `gcloud run services update` swaps the image
-4. Probes `/healthz` with an OIDC token minted for the Cloud Build SA
+4. Probes `/api/health` (public services) or asserts revision Ready (private services)
 
 Watch live: <https://console.cloud.google.com/cloud-build/builds?project=inference-expt>
 
@@ -511,12 +515,21 @@ PROJECT=inference-expt
 REGION=us-east4
 ENV=dev
 
+# Cloud Run reports two URLs for public services in projects on the new URL
+# scheme. Use the new-format one (the legacy *.a.run.app is unreachable —
+# see Troubleshooting). status.url returns the legacy one, so we read the
+# annotation array instead.
 AGENT_URL=$(gcloud run services describe stylist-$ENV-agent \
-  --project=$PROJECT --region=$REGION --format='value(status.url)')
+  --project=$PROJECT --region=$REGION --format=json \
+  | jq -r '.metadata.annotations."run.googleapis.com/urls"
+           | fromjson[]
+           | select(contains(".a.run.app") | not)')
+echo "AGENT_URL=$AGENT_URL"
 
-# (1) Agent /healthz — proves the service booted with all required env wired,
-#     Firestore + GCS clients constructed, etc.
-curl -sS "$AGENT_URL/healthz" | jq .   # → {"status":"ok",...}
+# (1) Agent /api/health — proves the service booted with all required env wired,
+#     Firestore + GCS clients constructed, etc. (We do NOT use /healthz: the
+#     Cloud Run edge frontend intercepts that path and returns its own 404.)
+curl -sS "$AGENT_URL/api/health" | jq .   # → {"status":"ok",...}
 
 # (2) Inventory + weather revisions are Ready (the Cloud Build smoke step
 #     already asserts this, but a one-liner here confirms).
@@ -573,7 +586,7 @@ done
 
 ### Step 7 — Exit checklist for §1.3
 
-- [ ] Agent `/healthz` returns 200 (Step 5 part 1)
+- [ ] Agent `/api/health` returns 200 (Step 5 part 1)
 - [ ] Weather + inventory revisions report `Ready=True` (Step 5 part 2)
 - [ ] Cloud Build smoke step passed for all three services (revision Ready confirmed inside CI; see §1.3 troubleshooting note for why no HTTP probe on private services)
 
@@ -1355,6 +1368,7 @@ the next environment. For now you can:
 | Inventory pod 500s with `permission denied for table users` | Postgres GRANTs not run for the IAM user | Run Step 4 — `GRANT ... ON ALL TABLES TO "inventory-$ENV-sa@..."` |
 | Inventory startup probe fails with `ImportError: email-validator is not installed` | pydantic's `EmailStr` needs an optional dep | Confirm `pydantic[email]==2.9.2` (not bare `pydantic`) in `services/inventory-api/requirements.txt`; rebuild |
 | `cloud-sql-proxy` from Cloud Shell errors with `instance does not have IP of type "PUBLIC"` | Cloud SQL instance is private-only and Cloud Shell isn't in your VPC | Don't try to `psql` from Cloud Shell. Add the SQL to `db/migrations/000N_*.sql` and re-run `gcloud builds submit --config=ci/cloudbuild-migrate.yaml ...`. Cloud Run Job runs inside the VPC. |
+| Public Cloud Run service returns GFE `404 Not Found` HTML on every request even though container is healthy (internal STARTUP/LIVENESS probes get 200, revision is `Ready=True`) | This GCP project has been migrated to the new Cloud Run URL format `<service>-<projectnumber>.<region>.run.app`. The legacy `<service>-<hash>-<regioncode>.a.run.app` URL that `gcloud run services describe --format='value(status.url)'` reports is *not routable*. Both URLs are listed in `metadata.annotations.run.googleapis.com/urls` but only the new-format one works. | Use the new-format URL: `gcloud run services describe $SVC --format=json \| jq -r '.metadata.annotations."run.googleapis.com/urls" \| fromjson[] \| select(contains(".run.app") and (contains(".a.run.app") \| not))'`. `ci/cloudbuild-service.yaml`'s smoke step picks the new-format URL automatically. |
 | `jq: parse error: Invalid numeric literal` when curling inventory from Cloud Shell | Inventory is `INGRESS_TRAFFIC_INTERNAL_ONLY`; Cloud Shell isn't in your VPC, so GFE returned an HTML 404 page (not JSON) | Use `gcloud run services proxy stylist-$ENV-inventory --port=8081 &` and point curl at `http://localhost:8081`. The proxy tunnels via the Cloud Run admin API and attaches your developer ID token. |
 | Weather pod returns 502 for every request | OWM key secret not accessible | `gcloud secrets get-iam-policy openweathermap-api-key` should list `weather-<env>-sa`; re-apply Terraform |
 | `api-dev.quantum-23.com` returns NXDOMAIN | DNS propagation in progress | Wait 1–5 min; verify `gcloud dns record-sets list --zone=quantum-23-com \| grep api-` |

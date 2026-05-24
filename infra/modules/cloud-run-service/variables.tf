@@ -27,8 +27,11 @@ variable "container_port" {
   default = 8080
 }
 variable "health_path" {
-  type    = string
-  default = "/healthz"
+  type = string
+  # NOTE: do NOT use `/healthz` — Cloud Run's edge frontend intercepts
+  # `/healthz`, `/health`, `/ready` and returns its own 404 page before
+  # the request reaches the container. Use a non-reserved path instead.
+  default = "/api/health"
 }
 
 variable "ingress" {

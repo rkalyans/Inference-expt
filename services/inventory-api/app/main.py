@@ -1,7 +1,7 @@
 """Inventory Tool API.
 
 Endpoints:
-  GET    /healthz
+  GET    /api/health
   POST   /users                                 -> get-or-create user
   POST   /items?user_id=...                     -> create clothing item
   GET    /items?user_id=...&category=...        -> list items
@@ -73,7 +73,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Stylist Inventory Tool", lifespan=lifespan)
 
 
-@app.get("/healthz")
+# NOTE: `/api/health` not `/healthz` — Cloud Run's edge frontend intercepts
+# `/healthz`, `/health`, `/ready` and serves its own 404 before traffic reaches
+# the container. See PHASE-1-RUNBOOK.md Troubleshooting (1.3).
+@app.get("/api/health")
 async def healthz():
     return {"status": "ok", "service": "inventory-api"}
 

@@ -6,7 +6,7 @@ URLs minted by the runtime service account.
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/healthz` | liveness |
+| GET | `/api/health` | liveness (renamed from `/healthz` — Cloud Run GFE intercepts `/healthz`) |
 | POST | `/users` | get-or-create by email |
 | POST | `/items?user_id=...` | create item (photo URL optional) |
 | GET | `/items?user_id=...&category=...` | list items |

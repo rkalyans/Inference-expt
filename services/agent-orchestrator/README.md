@@ -14,7 +14,7 @@ inventory, history), and streams a recommendation back as Server-Sent Events.
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/healthz` | liveness |
+| GET | `/api/health` | liveness (renamed from `/healthz` — Cloud Run GFE intercepts `/healthz`) |
 | POST | `/chat` | SSE stream of `{event, data}` frames |
 
 `/chat` body:
