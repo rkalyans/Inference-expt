@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   isSignInWithEmailLink,
@@ -15,6 +15,16 @@ import { useAuth } from "@/lib/auth-context";
 const EMAIL_KEY = "stylist.signin.email";
 
 export default function LoginPage() {
+  // useSearchParams() must be inside a Suspense boundary for Next.js 14
+  // static generation. See https://nextjs.org/docs/messages/missing-suspense-with-csr-bailout
+  return (
+    <Suspense fallback={null}>
+      <LoginInner />
+    </Suspense>
+  );
+}
+
+function LoginInner() {
   const router = useRouter();
   const params = useSearchParams();
   const { fbUser } = useAuth();
