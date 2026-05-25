@@ -59,8 +59,8 @@ steps:
           prod)              URL="https://api.quantum-23.com" ;;
           dev|staging)       URL="https://api-${_ENV}.quantum-23.com" ;;
         esac
-        echo "$URL" > /workspace/agent_url
-        echo "NEXT_PUBLIC_AGENT_URL=$URL"
+        echo "$$URL" > /workspace/agent_url
+        echo "NEXT_PUBLIC_AGENT_URL=$$URL"
 
   # 3. Build with the per-env public agent URL baked in
   - id: build
@@ -70,15 +70,15 @@ steps:
       - -c
       - |
         set -euo pipefail
-        AGENT_URL=$(cat /workspace/agent_url)
+        AGENT_URL=$$(cat /workspace/agent_url)
         IMAGE=us-east4-docker.pkg.dev/$PROJECT_ID/stylist-${_ENV}/frontend:${_SHA}
         docker build \
-          --build-arg NEXT_PUBLIC_AGENT_URL="$AGENT_URL" \
+          --build-arg NEXT_PUBLIC_AGENT_URL="$$AGENT_URL" \
           --build-arg NEXT_PUBLIC_FIREBASE_API_KEY="${_FB_API_KEY}" \
           --build-arg NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN="${_FB_AUTH_DOMAIN}" \
           --build-arg NEXT_PUBLIC_FIREBASE_PROJECT_ID="${_FB_PROJECT_ID}" \
           --build-arg NEXT_PUBLIC_FIREBASE_APP_ID="${_FB_APP_ID}" \
-          -t "$IMAGE" \
+          -t "$$IMAGE" \
           services/frontend
 
   # 4. Push
@@ -108,13 +108,13 @@ steps:
       - -c
       - |
         set -euo pipefail
-        URL=$(gcloud run services describe stylist-${_ENV}-frontend \
+        URL=$$(gcloud run services describe stylist-${_ENV}-frontend \
                 --region=us-east4 --format='value(status.url)')
-        echo "Probing $URL"
+        echo "Probing $$URL"
         for i in 1 2 3 4 5; do
-          code=$(curl -s -o /dev/null -w '%{http_code}' "$URL/" || true)
-          if [[ "$code" == "200" ]]; then echo "OK"; exit 0; fi
-          echo "attempt $i: HTTP $code; retrying..."
+          code=$$(curl -s -o /dev/null -w '%{http_code}' "$$URL/" || true)
+          if [[ "$$code" == "200" ]]; then echo "OK"; exit 0; fi
+          echo "attempt $$i: HTTP $$code; retrying..."
           sleep 5
         done
         echo "frontend did not return 200"; exit 1
