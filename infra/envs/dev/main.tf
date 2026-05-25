@@ -584,6 +584,11 @@ module "frontend" {
   ingress      = "INGRESS_TRAFFIC_ALL"
   allow_public = true
 
+  # Next.js standalone server only serves app routes; there's no /api/health
+  # endpoint. Probe the root page instead (Cloud Run's GFE does NOT intercept
+  # `/`, unlike `/healthz` / `/health` / `/ready`).
+  health_path = "/"
+
   dns_subdomain = "app-${local.env}" # app-dev.quantum-23.com
   domain        = var.domain
   dns_zone_name = data.terraform_remote_state.shared.outputs.dns_zone_name
