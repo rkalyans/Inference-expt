@@ -65,6 +65,9 @@ steps:
   # 3. Build with the per-env public agent URL baked in
   - id: build
     name: gcr.io/cloud-builders/docker
+    # Dockerfile uses `RUN --mount=type=cache` which requires BuildKit.
+    env:
+      - "DOCKER_BUILDKIT=1"
     entrypoint: bash
     args:
       - -c
