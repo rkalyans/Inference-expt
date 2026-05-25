@@ -17,6 +17,8 @@
 substitutions:
   _ENV: ""
   _SHA: "${BUILD_ID}"
+  _REGION: "us-east4"
+  _REPO: "stylist-docker"
   # Firebase web client config (per-env, set via trigger or --substitutions).
   # These are NOT secrets — they're public client identifiers.
   _FB_API_KEY: ""
@@ -30,7 +32,7 @@ options:
 
 images:
   - >-
-    us-east4-docker.pkg.dev/$PROJECT_ID/stylist-${_ENV}/frontend:${_SHA}
+    ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/frontend:${_ENV}-${_SHA}
 
 steps:
   # 1. Pre-flight: assert _ENV
@@ -74,7 +76,7 @@ steps:
       - |
         set -euo pipefail
         AGENT_URL=$$(cat /workspace/agent_url)
-        IMAGE=us-east4-docker.pkg.dev/$PROJECT_ID/stylist-${_ENV}/frontend:${_SHA}
+        IMAGE=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/frontend:${_ENV}-${_SHA}
         docker build \
           --build-arg NEXT_PUBLIC_AGENT_URL="$$AGENT_URL" \
           --build-arg NEXT_PUBLIC_FIREBASE_API_KEY="${_FB_API_KEY}" \
@@ -88,7 +90,7 @@ steps:
   - id: push
     name: gcr.io/cloud-builders/docker
     args:
-      ["push", "us-east4-docker.pkg.dev/$PROJECT_ID/stylist-${_ENV}/frontend:${_SHA}"]
+      ["push", "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/frontend:${_ENV}-${_SHA}"]
 
   # 5. Deploy to Cloud Run
   - id: deploy
@@ -100,7 +102,7 @@ steps:
         set -euo pipefail
         gcloud run services update stylist-${_ENV}-frontend \
           --region=us-east4 \
-          --image=us-east4-docker.pkg.dev/$PROJECT_ID/stylist-${_ENV}/frontend:${_SHA} \
+          --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/frontend:${_ENV}-${_SHA} \
           --quiet
 
   # 6. Smoke test (the public Cloud Run URL; DNS may not have propagated yet)
