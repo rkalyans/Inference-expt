@@ -76,7 +76,7 @@ async def _resolve_inventory_user(
         f"{base}/users", json={"email": email, "preferences": {}}, headers=headers
     )
     if r.status_code >= 400:
-        log.warning("auth.resolve_user_failed", status=r.status_code, body=r.text)
+        log.warning("auth.resolve_user_failed status=%s body=%s", r.status_code, r.text)
         raise HTTPException(502, f"inventory /users failed: {r.status_code}")
     return r.json()["id"]
 
