@@ -503,6 +503,13 @@ module "agent" {
   timeout          = "300s"
   vpc_connector_id = data.terraform_remote_state.shared.outputs.vpc_connector_id
 
+  # Inventory + weather are INGRESS_TRAFFIC_INTERNAL_ONLY and resolve to public
+  # *.run.app IPs. With the default PRIVATE_RANGES_ONLY egress those calls would
+  # bypass the connector, egress to the internet, and be rejected by the internal
+  # ingress with an empty-body 404. ALL_TRAFFIC routes them through the connector
+  # so they count as internal. Google APIs still work via Private Google Access.
+  vpc_egress = "ALL_TRAFFIC"
+
   env_vars = {
     APP_ENV            = local.env
     APP_NAME           = "stylist-agent"
