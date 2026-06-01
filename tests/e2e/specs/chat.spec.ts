@@ -11,14 +11,12 @@ test("chat returns a final recommendation", async ({ page }) => {
   await page.goto("/chat");
   await expect(page).toHaveURL(/\/chat(\?.*)?$/);
 
-  // Capture the SSE stream so we can prove the final event arrived. Match the
-  // POST to the agent's /chat (the GET page navigation to /chat already
-  // completed above, so this can only be the agent call).
+  // Capture the agent's /chat POST response. We deliberately match on the
+  // request (method + path) and NOT the status, so a non-2xx surfaces as a
+  // clear status assertion below instead of an opaque waitForResponse timeout.
+  // (The GET page navigation to /chat already completed above.)
   const sseDonePromise = page.waitForResponse(
-    (res) =>
-      res.request().method() === "POST" &&
-      res.url().endsWith("/chat") &&
-      res.status() === 200,
+    (res) => res.request().method() === "POST" && res.url().endsWith("/chat"),
     { timeout: 45_000 },
   );
 
@@ -30,7 +28,7 @@ test("chat returns a final recommendation", async ({ page }) => {
   const sseRes = await sseDonePromise;
   // Don't block on the full body — long-running streams; instead we just need
   // the UI to render the final recommendation.
-  expect(sseRes.ok()).toBeTruthy();
+  expect(sseRes.status(), await sseRes.text().catch(() => "")).toBe(200);
 
   // The stub agent's final recommendation renders its rationale paragraph,
   // which deterministically ends with this phrase regardless of weather.
