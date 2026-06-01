@@ -12,7 +12,11 @@ test.use({ storageState: { cookies: [], origins: [] } });
 
 test("landing page is public", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("link", { name: /sign in/i })).toBeVisible();
+  // Both the hero CTA and the header user-menu render a "Sign in" link when
+  // signed out, so scope to the first match to avoid a strict-mode violation.
+  await expect(
+    page.getByRole("link", { name: /sign in/i }).first(),
+  ).toBeVisible();
   await expect(page.getByText(/pick your outfit/i)).toBeVisible();
 });
 

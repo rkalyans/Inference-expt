@@ -11,25 +11,31 @@ test("chat returns a final recommendation", async ({ page }) => {
   await page.goto("/chat");
   await expect(page).toHaveURL(/\/chat(\?.*)?$/);
 
-  // Capture the SSE stream so we can prove the final event arrived.
+  // Capture the SSE stream so we can prove the final event arrived. Match the
+  // POST to the agent's /chat (the GET page navigation to /chat already
+  // completed above, so this can only be the agent call).
   const sseDonePromise = page.waitForResponse(
-    (res) => res.url().endsWith("/chat") && res.status() === 200,
+    (res) =>
+      res.request().method() === "POST" &&
+      res.url().endsWith("/chat") &&
+      res.status() === 200,
     { timeout: 45_000 },
   );
 
   await page
-    .getByPlaceholder(/where are you going|what's the occasion|tell me/i)
+    .getByPlaceholder(/ask stylist/i)
     .fill("Coffee meeting in Midtown, 9am, sunny.");
   await page.getByRole("button", { name: /send/i }).click();
 
   const sseRes = await sseDonePromise;
   // Don't block on the full body — long-running streams; instead we just need
-  // the UI to render the final card.
+  // the UI to render the final recommendation.
   expect(sseRes.ok()).toBeTruthy();
 
-  // The final event renders a card whose header includes "outfit" or the
-  // rationale paragraph. Match either.
+  // The stub agent's final recommendation renders its rationale paragraph,
+  // which deterministically ends with this phrase regardless of weather.
+  // (§1.6 runs against LLM_MODE=stub; revisit when the real brain lands in §1.2.)
   await expect(
-    page.getByText(/outfit|recommendation|rationale/i).first(),
+    page.getByText(/picked items by warmth/i).first(),
   ).toBeVisible({ timeout: 60_000 });
 });

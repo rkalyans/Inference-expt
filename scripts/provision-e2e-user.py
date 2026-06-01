@@ -3,10 +3,12 @@
 
 Usage:
     GOOGLE_APPLICATION_CREDENTIALS=... \\
-    PROJECT_ID=stylist-dev \\
-    TEST_EMAIL=e2e@stylist-dev.com \\
+    PROJECT_ID=inference-expt \\
+    TEST_EMAIL=e2e@stylist.test \\
     TEST_PASSWORD='secret' \\
     python scripts/provision-e2e-user.py
+
+(One Firebase project per GCP project; for dev that is `inference-expt`.)
 
 Idempotent. If the user already exists, just updates the password. Designed
 to be run once per environment, not from CI.

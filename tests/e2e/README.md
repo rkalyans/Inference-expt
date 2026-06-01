@@ -27,7 +27,7 @@ npx playwright install --with-deps chromium
 export E2E_BASE_URL=https://app-dev.quantum-23.com
 export E2E_AGENT_URL=https://api-dev.quantum-23.com
 export E2E_FIREBASE_API_KEY=AIza...               # same as _FB_API_KEY in the frontend build
-export E2E_TEST_EMAIL=e2e@stylist-dev.com         # provisioned in the dev Firebase project
+export E2E_TEST_EMAIL=e2e@stylist.test            # provisioned in the inference-expt Firebase project
 export E2E_TEST_PASSWORD=...                      # rotate in Secret Manager
 
 npm test
@@ -39,10 +39,14 @@ npm run report      # open the HTML report
 Firebase Auth doesn't have a public "create user without a real email" API,
 so we provision via the Admin SDK once per environment:
 
+> NOTE: There is one Firebase project per GCP project. For `dev` that is
+> **`inference-expt`** (not a separate `stylist-dev` project). Provision the
+> user and store the secrets there.
+
 ```bash
 gcloud auth application-default login
-PROJECT=stylist-dev
-TEST_EMAIL=e2e@stylist-dev.com
+PROJECT=inference-expt
+TEST_EMAIL=e2e@stylist.test
 TEST_PASSWORD=$(openssl rand -base64 24)
 
 # Push the password into Secret Manager so Cloud Build can read it.

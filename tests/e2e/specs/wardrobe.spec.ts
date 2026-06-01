@@ -15,7 +15,9 @@ test("add then delete an item", async ({ page }) => {
     .slice(2, 7)}`;
 
   await page.getByRole("button", { name: /add item/i }).click();
-  await page.getByLabel(/name/i).fill(itemName);
+  // The modal's Name <label> isn't programmatically associated with its input,
+  // so target the input by its placeholder instead of getByLabel.
+  await page.getByPlaceholder(/navy crewneck/i).fill(itemName);
   // Pick a deterministic category.
   await page.getByRole("button", { name: /^bottom$/i }).first().click();
   await page.getByRole("button", { name: /^save$/i }).click();
