@@ -42,6 +42,28 @@ setup("authenticate", async ({ page, context }) => {
     expiresIn: string;
   };
 
+  // 1b. Warm up the agent so the first *feature* spec doesn't absorb a Cloud
+  //     Run cold start (~20s) and blow its per-assertion timeout. Poll the
+  //     unauthenticated health endpoint until the container is up, then prime
+  //     the authenticated BFF -> inventory path (resolves the inventory user
+  //     and warms the DB connection) so listItems/createItem return promptly.
+  const warmupDeadline = Date.now() + 60_000;
+  for (;;) {
+    try {
+      const r = await fetch(`${env.agentURL}/api/health`);
+      if (r.ok) break;
+    } catch {
+      // container still starting; keep polling
+    }
+    if (Date.now() > warmupDeadline) {
+      throw new Error("agent did not become healthy within 60s");
+    }
+    await new Promise((res) => setTimeout(res, 2_000));
+  }
+  await fetch(`${env.agentURL}/api/items?limit=1`, {
+    headers: { Authorization: `Bearer ${creds.idToken}` },
+  }).catch(() => {});
+
   // 2. Open the app — this is what fixes the localStorage origin and bootstraps
   //    the Firebase SDK so the next reload picks up our seeded user.
   await page.goto("/");
