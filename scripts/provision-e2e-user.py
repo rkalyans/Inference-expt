@@ -4,7 +4,7 @@
 Usage:
     GOOGLE_APPLICATION_CREDENTIALS=... \\
     PROJECT_ID=inference-expt \\
-    TEST_EMAIL=e2e@stylist.test \\
+    TEST_EMAIL=e2e@stylist-dev.com \\
     TEST_PASSWORD='secret' \\
     python scripts/provision-e2e-user.py
 

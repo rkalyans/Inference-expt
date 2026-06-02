@@ -141,7 +141,11 @@ export async function* streamChat(
   while (true) {
     const { value, done } = await reader.read();
     if (done) break;
-    buf += decoder.decode(value, { stream: true });
+    // Normalize CRLF -> LF: sse_starlette emits `\r\n` line separators, so
+    // frames are delimited by `\r\n\r\n`. The framing logic below splits on
+    // `\n\n`, which never matches inside `\r\n\r\n`. Normalize here so the
+    // parser works regardless of the server's separator choice.
+    buf += decoder.decode(value, { stream: true }).replace(/\r\n?/g, "\n");
     // SSE frames are separated by blank lines
     let idx: number;
     while ((idx = buf.indexOf("\n\n")) >= 0) {

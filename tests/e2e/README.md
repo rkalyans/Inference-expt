@@ -27,7 +27,7 @@ npx playwright install --with-deps chromium
 export E2E_BASE_URL=https://app-dev.quantum-23.com
 export E2E_AGENT_URL=https://api-dev.quantum-23.com
 export E2E_FIREBASE_API_KEY=AIza...               # same as _FB_API_KEY in the frontend build
-export E2E_TEST_EMAIL=e2e@stylist.test            # provisioned in the inference-expt Firebase project
+export E2E_TEST_EMAIL=e2e@stylist-dev.com         # provisioned in the inference-expt Firebase project
 export E2E_TEST_PASSWORD=...                      # rotate in Secret Manager
 
 npm test
@@ -46,7 +46,7 @@ so we provision via the Admin SDK once per environment:
 ```bash
 gcloud auth application-default login
 PROJECT=inference-expt
-TEST_EMAIL=e2e@stylist.test
+TEST_EMAIL=e2e@stylist-dev.com
 TEST_PASSWORD=$(openssl rand -base64 24)
 
 # Push the password into Secret Manager so Cloud Build can read it.
